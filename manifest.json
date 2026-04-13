@@ -1,9 +1,9 @@
 {
   "id": "note-flashcards",
-  "name": "Note Flashcards",
+  "name": "Study Flashcards",
   "version": "0.1.0",
   "minAppVersion": "1.5.0",
-  "description": "Generate and review flashcards from note content.",
+  "description": "Generate and review study flashcards from your Obsidian notes.",
   "author": "少爷",
   "isDesktopOnly": false
 }

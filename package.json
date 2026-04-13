@@ -1,7 +1,7 @@
 {
-  "name": "obsidian-flashcards-plugin",
-  "version": "1.0.0",
-  "description": "Obsidian plugin for generating and reviewing flashcards from notes",
+  "name": "obsidian-study-flashcards",
+  "version": "0.1.0",
+  "description": "Obsidian plugin for generating and reviewing study flashcards from notes",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",
@@ -11,9 +11,10 @@
   "keywords": [
     "obsidian",
     "plugin",
-    "flashcards"
+    "flashcards",
+    "study"
   ],
-  "author": "",
+  "author": "少爷",
   "license": "MIT",
   "dependencies": {
     "obsidian": "^1.12.3"
