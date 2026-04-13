@@ -68,6 +68,12 @@ npm run build
 
 - 生成模式：`rule` / `ai` / `hybrid`
 - 每篇笔记最多生成卡片数
+- AI Provider（OpenAI 兼容 / OpenRouter / Azure OpenAI / Anthropic / Gemini）
+- AI 接口地址（兼容 OpenAI Chat Completions）
+- AI API Key
+- AI 模型名
+- AI 附加提示词（可选）
+- AI 连接测试按钮
 - 摘要长度
 - 忽略文件夹列表
 - 每日新卡数量
@@ -77,6 +83,18 @@ npm run build
 - 是否在复习中显示全部卡片
 - 重置全部卡片数据
 - 恢复默认设置
+
+### 4. AI 模式配置说明
+
+- 当前 AI 模式支持五类 Provider：
+  - OpenAI 兼容（`/v1/chat/completions`）
+  - OpenRouter（`https://openrouter.ai/api/v1/chat/completions`）
+  - Azure OpenAI（`.../openai/deployments/{model}/chat/completions?...`）
+  - Anthropic（`/v1/messages`）
+  - Gemini（`.../models/{model}:generateContent`，支持 `{model}` 占位符）
+- 你可以切换 Provider 后直接使用默认接口地址，也可以手动改成自定义网关地址。
+- Azure OpenAI 场景中，“AI 模型名”填写 deployment 名称即可，URL 中可保留 `{model}` 自动替换。
+- `hybrid` 模式下，如果 AI 调用失败，会自动回退到规则生成。
 
 ## 开发
 

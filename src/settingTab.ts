@@ -1,6 +1,9 @@
-import { App, PluginSettingTab, Setting } from "obsidian";
+import { App, Notice, PluginSettingTab, Setting } from "obsidian";
 import type NoteFlashcardsPlugin from "../main";
+import { testAiConnection } from "./aiGenerator";
 import {
+  getAiProviderOptions,
+  getDefaultAiApiUrl,
   getGeneratorModeOptions,
   parseNonNegativeInteger,
   parsePositiveInteger,
@@ -43,6 +46,86 @@ export class NoteFlashcardsSettingTab extends PluginSettingTab {
           const parsed = parsePositiveInteger(value);
           if (parsed !== null) {
             await updateSetting(this.plugin.settings, "maxCardsPerNote", parsed, async () => this.plugin.saveSettings());
+          }
+        }));
+
+    new Setting(containerEl)
+      .setName(SETTINGS_COPY.aiProvider.name)
+      .setDesc(SETTINGS_COPY.aiProvider.description)
+      .addDropdown((dropdown) => {
+        for (const option of getAiProviderOptions()) {
+          dropdown.addOption(option.value, option.label);
+        }
+        dropdown
+          .setValue(this.plugin.settings.aiProvider)
+          .onChange(async (value) => {
+            const nextProvider = value as typeof this.plugin.settings.aiProvider;
+            const currentProvider = this.plugin.settings.aiProvider;
+            const currentApiUrl = this.plugin.settings.aiApiUrl.trim();
+            const currentDefaultApiUrl = getDefaultAiApiUrl(currentProvider);
+            const shouldUpdateApiUrl = currentApiUrl.length === 0 || currentApiUrl === currentDefaultApiUrl;
+
+            this.plugin.settings.aiProvider = nextProvider;
+            if (shouldUpdateApiUrl) {
+              this.plugin.settings.aiApiUrl = getDefaultAiApiUrl(nextProvider);
+            }
+            await this.plugin.saveSettings();
+            this.display();
+          });
+      });
+
+    new Setting(containerEl)
+      .setName(SETTINGS_COPY.aiApiUrl.name)
+      .setDesc(SETTINGS_COPY.aiApiUrl.description)
+      .addText((text) => text
+        .setPlaceholder(getDefaultAiApiUrl(this.plugin.settings.aiProvider))
+        .setValue(this.plugin.settings.aiApiUrl)
+        .onChange(async (value) => {
+          await updateSetting(this.plugin.settings, "aiApiUrl", value.trim(), async () => this.plugin.saveSettings());
+        }));
+
+    new Setting(containerEl)
+      .setName(SETTINGS_COPY.aiApiKey.name)
+      .setDesc(SETTINGS_COPY.aiApiKey.description)
+      .addText((text) => text
+        .setPlaceholder(SETTINGS_COPY.aiApiKey.placeholder)
+        .setValue(this.plugin.settings.aiApiKey)
+        .onChange(async (value) => {
+          await updateSetting(this.plugin.settings, "aiApiKey", value.trim(), async () => this.plugin.saveSettings());
+        }));
+
+    new Setting(containerEl)
+      .setName(SETTINGS_COPY.aiModel.name)
+      .setDesc(SETTINGS_COPY.aiModel.description)
+      .addText((text) => text
+        .setPlaceholder(SETTINGS_COPY.aiModel.placeholder)
+        .setValue(this.plugin.settings.aiModel)
+        .onChange(async (value) => {
+          await updateSetting(this.plugin.settings, "aiModel", value.trim(), async () => this.plugin.saveSettings());
+        }));
+
+    new Setting(containerEl)
+      .setName(SETTINGS_COPY.aiPrompt.name)
+      .setDesc(SETTINGS_COPY.aiPrompt.description)
+      .addTextArea((text) => text
+        .setPlaceholder(SETTINGS_COPY.aiPrompt.placeholder)
+        .setValue(this.plugin.settings.aiPrompt)
+        .onChange(async (value) => {
+          await updateSetting(this.plugin.settings, "aiPrompt", value.trim(), async () => this.plugin.saveSettings());
+        }));
+
+    new Setting(containerEl)
+      .setName(SETTINGS_COPY.aiConnectionTest.name)
+      .setDesc(SETTINGS_COPY.aiConnectionTest.description)
+      .addButton((button) => button
+        .setButtonText(SETTINGS_COPY.aiConnectionTest.button)
+        .onClick(async () => {
+          try {
+            await testAiConnection(this.plugin.settings);
+            new Notice(SETTINGS_COPY.aiConnectionTest.success);
+          } catch (error) {
+            const detail = error instanceof Error ? error.message : undefined;
+            new Notice(SETTINGS_COPY.aiConnectionTest.failed(detail));
           }
         }));
 

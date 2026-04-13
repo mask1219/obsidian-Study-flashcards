@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  getAiProviderOptions,
+  getDefaultAiApiUrl,
   getGeneratorModeOptions,
   parseNonNegativeInteger,
   parsePositiveInteger,
@@ -39,5 +41,14 @@ describe("settingsState", () => {
 
   it("returns generator mode options", () => {
     expect(getGeneratorModeOptions().map((option) => option.value)).toEqual(["rule", "ai", "hybrid"]);
+  });
+
+  it("returns AI provider options and default API URLs", () => {
+    expect(getAiProviderOptions().map((option) => option.value)).toEqual(["openai-compatible", "openrouter", "azure-openai", "anthropic", "gemini"]);
+    expect(getDefaultAiApiUrl("openai-compatible")).toBe("https://api.openai.com/v1/chat/completions");
+    expect(getDefaultAiApiUrl("openrouter")).toBe("https://openrouter.ai/api/v1/chat/completions");
+    expect(getDefaultAiApiUrl("azure-openai")).toBe("https://{resource}.openai.azure.com/openai/deployments/{model}/chat/completions?api-version=2024-06-01");
+    expect(getDefaultAiApiUrl("anthropic")).toBe("https://api.anthropic.com/v1/messages");
+    expect(getDefaultAiApiUrl("gemini")).toBe("https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent");
   });
 });

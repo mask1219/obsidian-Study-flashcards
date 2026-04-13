@@ -1,4 +1,5 @@
 export type GeneratorMode = "rule" | "ai" | "hybrid";
+export type AiProvider = "openai-compatible" | "openrouter" | "azure-openai" | "anthropic" | "gemini";
 export type CardState = "new" | "learning" | "review";
 export type StudyScope = "current" | "folder" | "all";
 export type StudyCountMode = "random10" | "all";
@@ -45,6 +46,11 @@ export interface NoteFlashcardsSettings {
   generatorMode: GeneratorMode;
   maxCardsPerNote: number;
   summaryLength: number;
+  aiProvider: AiProvider;
+  aiApiUrl: string;
+  aiApiKey: string;
+  aiModel: string;
+  aiPrompt: string;
   ignoredFolders: string[];
   newCardsPerDay: number;
   showAllCardsInReview: boolean;

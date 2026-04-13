@@ -2,6 +2,22 @@ export class Notice {
   constructor(_message: string) {}
 }
 
+export async function requestUrl(_request: unknown): Promise<{
+  status: number;
+  headers: Record<string, string>;
+  arrayBuffer: ArrayBuffer;
+  json: unknown;
+  text: string;
+}> {
+  return {
+    status: 501,
+    headers: {},
+    arrayBuffer: new ArrayBuffer(0),
+    json: {},
+    text: ""
+  };
+}
+
 export class TAbstractFile {
   path = "";
 }

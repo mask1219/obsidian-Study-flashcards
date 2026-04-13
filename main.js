@@ -23,13 +23,18 @@ __export(main_exports, {
   default: () => NoteFlashcardsPlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian4 = require("obsidian");
+var import_obsidian5 = require("obsidian");
 
 // src/settings.ts
 var DEFAULT_SETTINGS = {
   generatorMode: "rule",
   maxCardsPerNote: 12,
   summaryLength: 220,
+  aiProvider: "openai-compatible",
+  aiApiUrl: "https://api.openai.com/v1/chat/completions",
+  aiApiKey: "",
+  aiModel: "",
+  aiPrompt: "",
   ignoredFolders: [],
   newCardsPerDay: 10,
   showAllCardsInReview: false,
@@ -183,7 +188,7 @@ var CardStore = class {
 };
 
 // src/generationService.ts
-var import_obsidian = require("obsidian");
+var import_obsidian2 = require("obsidian");
 
 // src/noteParser.ts
 function createDraft(heading = "\u6587\u6863\u6982\u8981", anchorText) {
@@ -243,9 +248,7 @@ function parseMarkdownSections(markdown, sourcePath) {
 }
 
 // src/aiGenerator.ts
-async function generateAiFlashcards(_sections) {
-  throw new Error(GENERATION_COPY.errors.aiNotConfigured);
-}
+var import_obsidian = require("obsidian");
 
 // src/cardFactory.ts
 function hashText(input) {
@@ -289,8 +292,295 @@ function createNewFlashcard(question, answer, section, generatorType) {
   };
 }
 
-// src/ruleGenerator.ts
+// src/aiGenerator.ts
+var DEFAULT_SYSTEM_PROMPT = [
+  "\u4F60\u662F\u4E00\u4E2A\u4E25\u8C28\u7684\u5B66\u4E60\u5361\u7247\u751F\u6210\u52A9\u624B\u3002",
+  "\u4F60\u53EA\u80FD\u57FA\u4E8E\u7528\u6237\u63D0\u4F9B\u7684\u7B14\u8BB0\u5185\u5BB9\u751F\u6210\u95EA\u5361\uFF0C\u4E0D\u8981\u8865\u5145\u5916\u90E8\u77E5\u8BC6\u3002",
+  "\u8F93\u51FA\u5FC5\u987B\u662F\u4E25\u683C JSON\uFF0C\u4E0D\u80FD\u8F93\u51FA Markdown \u4EE3\u7801\u5757\u6216\u989D\u5916\u89E3\u91CA\u3002"
+].join(" ");
+function isConfigured(settings) {
+  return settings.aiApiUrl.trim().length > 0 && settings.aiApiKey.trim().length > 0 && settings.aiModel.trim().length > 0;
+}
+function resolveProviderApiUrl(apiUrl, model) {
+  return apiUrl.includes("{model}") ? apiUrl.replace("{model}", encodeURIComponent(model)) : apiUrl;
+}
 function clip(text, maxLength) {
+  return text.length <= maxLength ? text : `${text.slice(0, maxLength).trim()}\u2026`;
+}
+function extractOpenAiContent(response) {
+  const payload = response;
+  const content = payload.choices?.[0]?.message?.content;
+  if (typeof content === "string") {
+    return content.trim();
+  }
+  if (Array.isArray(content)) {
+    return content.map((part) => typeof part?.text === "string" ? part.text : "").join("").trim();
+  }
+  return "";
+}
+function extractAnthropicContent(response) {
+  const content = response.content;
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  return content.filter((part) => part?.type === "text" && typeof part.text === "string").map((part) => part.text).join("").trim();
+}
+function extractGeminiContent(response) {
+  const parts = response.candidates?.[0]?.content?.parts;
+  if (!Array.isArray(parts)) {
+    return "";
+  }
+  return parts.map((part) => typeof part?.text === "string" ? part.text : "").join("").trim();
+}
+function extractProviderContent(response, settings) {
+  if (settings.aiProvider === "anthropic") {
+    return extractAnthropicContent(response);
+  }
+  if (settings.aiProvider === "gemini") {
+    return extractGeminiContent(response);
+  }
+  return extractOpenAiContent(response);
+}
+function stripMarkdownCodeFence(content) {
+  const fencedMatch = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(content.trim());
+  return fencedMatch ? fencedMatch[1].trim() : content.trim();
+}
+function extractJsonText(content) {
+  const cleaned = stripMarkdownCodeFence(content);
+  const firstObject = cleaned.indexOf("{");
+  const lastObject = cleaned.lastIndexOf("}");
+  if (firstObject !== -1 && lastObject > firstObject) {
+    return cleaned.slice(firstObject, lastObject + 1);
+  }
+  const firstArray = cleaned.indexOf("[");
+  const lastArray = cleaned.lastIndexOf("]");
+  if (firstArray !== -1 && lastArray > firstArray) {
+    return JSON.stringify({ cards: JSON.parse(cleaned.slice(firstArray, lastArray + 1)) });
+  }
+  return cleaned;
+}
+function parseAiResponse(content) {
+  try {
+    const parsed = JSON.parse(extractJsonText(content));
+    if (Array.isArray(parsed)) {
+      return { cards: parsed };
+    }
+    if (parsed && typeof parsed === "object") {
+      return parsed;
+    }
+    return null;
+  } catch (_error) {
+    return null;
+  }
+}
+function buildUserPrompt(sections, settings) {
+  const payload = sections.map((section, index) => ({
+    sectionIndex: index,
+    heading: section.heading,
+    content: section.content,
+    listItems: section.listItems
+  }));
+  const extraPrompt = settings.aiPrompt.trim();
+  return [
+    `\u8BF7\u6839\u636E\u4E0B\u9762\u7684\u7B14\u8BB0\u5206\u6BB5\u751F\u6210\u6700\u591A ${settings.maxCardsPerNote} \u5F20\u4E2D\u6587\u95EE\u7B54\u95EA\u5361\u3002`,
+    `\u6BCF\u5F20\u5361\u7247\u7684 answer \u5C3D\u91CF\u63A7\u5236\u5728 ${settings.summaryLength} \u4E2A\u5B57\u7B26\u4EE5\u5185\u3002`,
+    "\u4F18\u5148\u63D0\u70BC\u5B9A\u4E49\u3001\u539F\u7406\u3001\u6B65\u9AA4\u3001\u5BF9\u6BD4\u3001\u5173\u952E\u7ED3\u8BBA\u3002",
+    "\u5982\u679C\u67D0\u4E9B\u5185\u5BB9\u4E0D\u9002\u5408\u51FA\u9898\uFF0C\u53EF\u4EE5\u5C11\u51FA\u9898\u3002",
+    "\u6BCF\u5F20\u5361\u7247\u90FD\u5FC5\u987B\u5305\u542B sectionIndex\u3001question\u3001answer \u4E09\u4E2A\u5B57\u6BB5\u3002",
+    "\u8BF7\u4E25\u683C\u8FD4\u56DE JSON\uFF0C\u683C\u5F0F\u5982\u4E0B\uFF1A",
+    '{"cards":[{"sectionIndex":0,"question":"\u95EE\u9898","answer":"\u7B54\u6848"}]}',
+    extraPrompt ? `\u989D\u5916\u8981\u6C42\uFF1A${extraPrompt}` : "",
+    `sections=${JSON.stringify(payload)}`
+  ].filter(Boolean).join("\n");
+}
+function normalizeCards(payload, sections, settings) {
+  if (!payload || !Array.isArray(payload.cards)) {
+    return [];
+  }
+  return payload.cards.slice(0, settings.maxCardsPerNote).flatMap((item) => {
+    const card = item;
+    const sectionIndex = typeof card.sectionIndex === "number" ? card.sectionIndex : -1;
+    const question = typeof card.question === "string" ? card.question.trim() : "";
+    const answer = typeof card.answer === "string" ? clip(card.answer.trim(), settings.summaryLength) : "";
+    const section = sections[sectionIndex];
+    if (!section || !question || !answer) {
+      return [];
+    }
+    return [createNewFlashcard(question, answer, section, "ai")];
+  });
+}
+function buildProviderRequest(userPrompt, settings) {
+  const model = settings.aiModel.trim();
+  const apiKey = settings.aiApiKey.trim();
+  if (settings.aiProvider === "anthropic") {
+    return {
+      url: settings.aiApiUrl.trim(),
+      headers: {
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01"
+      },
+      body: JSON.stringify({
+        model,
+        temperature: 0.2,
+        max_tokens: 1600,
+        system: DEFAULT_SYSTEM_PROMPT,
+        messages: [
+          {
+            role: "user",
+            content: userPrompt
+          }
+        ]
+      })
+    };
+  }
+  if (settings.aiProvider === "gemini") {
+    return {
+      url: resolveProviderApiUrl(settings.aiApiUrl.trim(), model),
+      headers: {
+        "x-goog-api-key": apiKey
+      },
+      body: JSON.stringify({
+        contents: [
+          {
+            role: "user",
+            parts: [
+              {
+                text: `${DEFAULT_SYSTEM_PROMPT}
+
+${userPrompt}`
+              }
+            ]
+          }
+        ],
+        generationConfig: {
+          temperature: 0.2
+        }
+      })
+    };
+  }
+  if (settings.aiProvider === "azure-openai") {
+    return {
+      url: resolveProviderApiUrl(settings.aiApiUrl.trim(), model),
+      headers: {
+        "api-key": apiKey
+      },
+      body: JSON.stringify({
+        temperature: 0.2,
+        messages: [
+          {
+            role: "system",
+            content: DEFAULT_SYSTEM_PROMPT
+          },
+          {
+            role: "user",
+            content: userPrompt
+          }
+        ]
+      })
+    };
+  }
+  if (settings.aiProvider === "openrouter") {
+    return {
+      url: settings.aiApiUrl.trim(),
+      headers: {
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model,
+        temperature: 0.2,
+        messages: [
+          {
+            role: "system",
+            content: DEFAULT_SYSTEM_PROMPT
+          },
+          {
+            role: "user",
+            content: userPrompt
+          }
+        ]
+      })
+    };
+  }
+  return {
+    url: settings.aiApiUrl.trim(),
+    headers: {
+      Authorization: `Bearer ${apiKey}`
+    },
+    body: JSON.stringify({
+      model,
+      temperature: 0.2,
+      messages: [
+        {
+          role: "system",
+          content: DEFAULT_SYSTEM_PROMPT
+        },
+        {
+          role: "user",
+          content: userPrompt
+        }
+      ]
+    })
+  };
+}
+function extractErrorDetail(status, json) {
+  const error = json.error;
+  if (typeof error?.message === "string" && error.message.trim().length > 0) {
+    return error.message;
+  }
+  const message = json.message;
+  if (typeof message === "string" && message.trim().length > 0) {
+    return message;
+  }
+  return `HTTP ${status}`;
+}
+async function requestProviderContent(userPrompt, settings) {
+  const requestConfig = buildProviderRequest(userPrompt, settings);
+  let response;
+  try {
+    response = await (0, import_obsidian.requestUrl)({
+      url: requestConfig.url,
+      method: "POST",
+      contentType: "application/json",
+      headers: requestConfig.headers,
+      body: requestConfig.body,
+      throw: false
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : void 0;
+    throw new Error(GENERATION_COPY.errors.aiRequestFailed(detail));
+  }
+  if (response.status >= 400) {
+    throw new Error(GENERATION_COPY.errors.aiRequestFailed(extractErrorDetail(response.status, response.json)));
+  }
+  return extractProviderContent(response.json, settings);
+}
+async function generateAiFlashcards(sections, settings) {
+  if (!isConfigured(settings)) {
+    throw new Error(GENERATION_COPY.errors.aiNotConfigured);
+  }
+  if (sections.length === 0) {
+    return [];
+  }
+  const content = await requestProviderContent(buildUserPrompt(sections, settings), settings);
+  const cards = normalizeCards(parseAiResponse(content), sections, settings);
+  if (cards.length === 0) {
+    throw new Error(GENERATION_COPY.errors.aiInvalidResponse);
+  }
+  return cards;
+}
+async function testAiConnection(settings) {
+  if (!isConfigured(settings)) {
+    throw new Error(GENERATION_COPY.errors.aiNotConfigured);
+  }
+  const probePrompt = "\u8BF7\u56DE\u590D\u4EFB\u610F\u7B80\u77ED\u6587\u672C\u3002";
+  const content = await requestProviderContent(probePrompt, settings);
+  if (!content.trim()) {
+    throw new Error(GENERATION_COPY.errors.aiInvalidResponse);
+  }
+}
+
+// src/ruleGenerator.ts
+function clip2(text, maxLength) {
   return text.length <= maxLength ? text : `${text.slice(0, maxLength).trim()}\u2026`;
 }
 function createCard(question, answer, section) {
@@ -303,20 +593,20 @@ function generateRuleFlashcards(sections, summaryLength, maxCardsPerNote) {
       break;
     }
     if (section.heading && section.content) {
-      cards.push(createCard(`\u201C${section.heading}\u201D\u8FD9\u4E00\u8282\u8BB2\u4E86\u4EC0\u4E48\uFF1F`, clip(section.content, summaryLength), section));
+      cards.push(createCard(`\u201C${section.heading}\u201D\u8FD9\u4E00\u8282\u8BB2\u4E86\u4EC0\u4E48\uFF1F`, clip2(section.content, summaryLength), section));
     }
     if (cards.length >= maxCardsPerNote) {
       break;
     }
     if (section.listItems.length > 0) {
-      cards.push(createCard(`\u201C${section.heading}\u201D\u7684\u8981\u70B9\u6709\u54EA\u4E9B\uFF1F`, clip(section.listItems.join("\uFF1B"), summaryLength), section));
+      cards.push(createCard(`\u201C${section.heading}\u201D\u7684\u8981\u70B9\u6709\u54EA\u4E9B\uFF1F`, clip2(section.listItems.join("\uFF1B"), summaryLength), section));
     }
     if (cards.length >= maxCardsPerNote) {
       break;
     }
     const definitionMatch = /([^。！？:\n]{2,30})[：:](.+)/.exec(section.content);
     if (definitionMatch) {
-      cards.push(createCard(`\u4EC0\u4E48\u662F${definitionMatch[1].trim()}\uFF1F`, clip(definitionMatch[2].trim(), summaryLength), section));
+      cards.push(createCard(`\u4EC0\u4E48\u662F${definitionMatch[1].trim()}\uFF1F`, clip2(definitionMatch[2].trim(), summaryLength), section));
     }
   }
   return cards.slice(0, maxCardsPerNote);
@@ -329,16 +619,18 @@ var GENERATION_COPY = {
     generatedFolder: (count) => `\u6279\u91CF\u751F\u6210\u5B8C\u6210\uFF0C\u5171\u751F\u6210 ${count} \u5F20\u95EA\u5361`
   },
   errors: {
-    aiNotConfigured: "AI \u751F\u6210\u5C1A\u672A\u914D\u7F6E\uFF0C\u8BF7\u5148\u5728\u540E\u7EED\u7248\u672C\u4E2D\u63A5\u5165\u6A21\u578B\u63D0\u4F9B\u5546\u3002"
+    aiNotConfigured: "AI \u751F\u6210\u5C1A\u672A\u914D\u7F6E\uFF0C\u8BF7\u5148\u586B\u5199 AI \u63A5\u53E3\u5730\u5740\u3001API Key \u548C\u6A21\u578B\u540D\u3002",
+    aiRequestFailed: (detail) => `AI \u63A5\u53E3\u8C03\u7528\u5931\u8D25${detail ? `\uFF1A${detail}` : ""}`,
+    aiInvalidResponse: "AI \u8FD4\u56DE\u5185\u5BB9\u65E0\u6CD5\u89E3\u6790\u4E3A\u95EA\u5361\uFF0C\u8BF7\u786E\u8BA4\u6240\u9009 Provider \u914D\u7F6E\u6B63\u786E\u5E76\u8FD4\u56DE\u6709\u6548 JSON\u3002"
   }
 };
 async function generateCardsForSections(sections, settings) {
   if (settings.generatorMode === "ai") {
-    return generateAiFlashcards(sections);
+    return generateAiFlashcards(sections, settings);
   }
   if (settings.generatorMode === "hybrid") {
     try {
-      return await generateAiFlashcards(sections);
+      return await generateAiFlashcards(sections, settings);
     } catch (_error) {
       return generateRuleFlashcards(sections, settings.summaryLength, settings.maxCardsPerNote);
     }
@@ -451,7 +743,7 @@ var GenerationService = class {
   }
   getFileByPath(path) {
     const file = this.vault.getAbstractFileByPath(path);
-    return file instanceof import_obsidian.TFile ? file : null;
+    return file instanceof import_obsidian2.TFile ? file : null;
   }
   async generateForFile(file) {
     const settings = this.settings();
@@ -459,7 +751,7 @@ var GenerationService = class {
     const sections = parseMarkdownSections(content, file.path);
     const cards = await generateCardsForSections(sections, settings);
     const count = await this.store.replaceCardsForSource(file.path, cards);
-    new import_obsidian.Notice(GENERATION_COPY.notices.generatedFile(file.basename, count));
+    new import_obsidian2.Notice(GENERATION_COPY.notices.generatedFile(file.basename, count));
     return count;
   }
   async generateForFolder(folderPath) {
@@ -469,7 +761,7 @@ var GenerationService = class {
     for (const file of files) {
       total += await this.generateForFile(file);
     }
-    new import_obsidian.Notice(GENERATION_COPY.notices.generatedFolder(total));
+    new import_obsidian2.Notice(GENERATION_COPY.notices.generatedFolder(total));
     return total;
   }
   async getCardsForSource(mode, path) {
@@ -491,9 +783,16 @@ var GenerationService = class {
 };
 
 // src/settingTab.ts
-var import_obsidian2 = require("obsidian");
+var import_obsidian3 = require("obsidian");
 
 // src/settingsState.ts
+var DEFAULT_AI_API_URLS = {
+  "openai-compatible": "https://api.openai.com/v1/chat/completions",
+  openrouter: "https://openrouter.ai/api/v1/chat/completions",
+  "azure-openai": "https://{resource}.openai.azure.com/openai/deployments/{model}/chat/completions?api-version=2024-06-01",
+  anthropic: "https://api.anthropic.com/v1/messages",
+  gemini: "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+};
 var SETTINGS_COPY = {
   generatorMode: {
     name: "\u751F\u6210\u6A21\u5F0F",
@@ -508,6 +807,44 @@ var SETTINGS_COPY = {
     name: "\u6BCF\u7BC7\u7B14\u8BB0\u6700\u5927\u5361\u7247\u6570",
     description: "\u9650\u5236\u5355\u7BC7\u7B14\u8BB0\u751F\u6210\u7684\u95EA\u5361\u6570\u91CF",
     placeholder: "12"
+  },
+  aiProvider: {
+    name: "AI Provider",
+    description: "\u9009\u62E9\u8981\u8C03\u7528\u7684\u6A21\u578B\u5E73\u53F0",
+    options: {
+      "openai-compatible": "OpenAI \u517C\u5BB9",
+      openrouter: "OpenRouter",
+      "azure-openai": "Azure OpenAI",
+      anthropic: "Anthropic",
+      gemini: "Gemini"
+    }
+  },
+  aiApiUrl: {
+    name: "AI \u63A5\u53E3\u5730\u5740",
+    description: "\u53EF\u81EA\u5B9A\u4E49\u5B8C\u6574\u63A5\u53E3\u5730\u5740\uFF1BGemini \u652F\u6301\u4F7F\u7528 {model} \u5360\u4F4D\u7B26",
+    placeholder: "https://api.openai.com/v1/chat/completions"
+  },
+  aiApiKey: {
+    name: "AI API Key",
+    description: "\u7528\u4E8E\u8C03\u7528 AI \u6A21\u578B\uFF0C\u5F53\u524D\u4F1A\u968F\u63D2\u4EF6\u8BBE\u7F6E\u4FDD\u5B58\u5728\u672C\u5730",
+    placeholder: "sk-..."
+  },
+  aiModel: {
+    name: "AI \u6A21\u578B\u540D",
+    description: "\u586B\u5199\u76EE\u6807\u6A21\u578B\u6807\u8BC6\uFF08Azure \u573A\u666F\u586B\u5199 deployment \u540D\u79F0\uFF09",
+    placeholder: "gpt-4o-mini"
+  },
+  aiPrompt: {
+    name: "AI \u9644\u52A0\u63D0\u793A\u8BCD",
+    description: "\u53EF\u9009\uFF0C\u7528\u4E8E\u8865\u5145\u751F\u6210\u504F\u597D\uFF1B\u63D2\u4EF6\u4ECD\u4F1A\u5F3A\u5236\u8981\u6C42\u8FD4\u56DE JSON",
+    placeholder: "\u4F8B\u5982\uFF1A\u66F4\u504F\u5411\u672F\u8BED\u5B9A\u4E49\u3001\u5BF9\u6BD4\u9898\u548C\u6B65\u9AA4\u9898"
+  },
+  aiConnectionTest: {
+    name: "AI \u8FDE\u63A5\u6D4B\u8BD5",
+    description: "\u4F7F\u7528\u5F53\u524D Provider\u3001\u63A5\u53E3\u5730\u5740\u3001API Key \u548C\u6A21\u578B\u540D\u8FDB\u884C\u4E00\u6B21\u8FDE\u901A\u6027\u9A8C\u8BC1",
+    button: "\u6D4B\u8BD5\u8FDE\u63A5",
+    success: "AI \u8FDE\u63A5\u6D4B\u8BD5\u6210\u529F",
+    failed: (detail) => `AI \u8FDE\u63A5\u6D4B\u8BD5\u5931\u8D25${detail ? `\uFF1A${detail}` : ""}`
   },
   summaryLength: {
     name: "\u7B54\u6848\u6458\u8981\u957F\u5EA6",
@@ -573,13 +910,25 @@ function getGeneratorModeOptions() {
     { value: "hybrid", label: SETTINGS_COPY.generatorMode.options.hybrid }
   ];
 }
+function getAiProviderOptions() {
+  return [
+    { value: "openai-compatible", label: SETTINGS_COPY.aiProvider.options["openai-compatible"] },
+    { value: "openrouter", label: SETTINGS_COPY.aiProvider.options.openrouter },
+    { value: "azure-openai", label: SETTINGS_COPY.aiProvider.options["azure-openai"] },
+    { value: "anthropic", label: SETTINGS_COPY.aiProvider.options.anthropic },
+    { value: "gemini", label: SETTINGS_COPY.aiProvider.options.gemini }
+  ];
+}
+function getDefaultAiApiUrl(provider) {
+  return DEFAULT_AI_API_URLS[provider];
+}
 async function updateSetting(settings, key, value, saveSettings) {
   settings[key] = value;
   await saveSettings();
 }
 
 // src/settingTab.ts
-var NoteFlashcardsSettingTab = class extends import_obsidian2.PluginSettingTab {
+var NoteFlashcardsSettingTab = class extends import_obsidian3.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.plugin = plugin;
@@ -587,7 +936,7 @@ var NoteFlashcardsSettingTab = class extends import_obsidian2.PluginSettingTab {
   display() {
     const { containerEl } = this;
     containerEl.empty();
-    new import_obsidian2.Setting(containerEl).setName(SETTINGS_COPY.generatorMode.name).setDesc(SETTINGS_COPY.generatorMode.description).addDropdown((dropdown) => {
+    new import_obsidian3.Setting(containerEl).setName(SETTINGS_COPY.generatorMode.name).setDesc(SETTINGS_COPY.generatorMode.description).addDropdown((dropdown) => {
       for (const option of getGeneratorModeOptions()) {
         dropdown.addOption(option.value, option.label);
       }
@@ -595,52 +944,91 @@ var NoteFlashcardsSettingTab = class extends import_obsidian2.PluginSettingTab {
         await updateSetting(this.plugin.settings, "generatorMode", value, async () => this.plugin.saveSettings());
       });
     });
-    new import_obsidian2.Setting(containerEl).setName(SETTINGS_COPY.maxCardsPerNote.name).setDesc(SETTINGS_COPY.maxCardsPerNote.description).addText((text) => text.setPlaceholder(SETTINGS_COPY.maxCardsPerNote.placeholder).setValue(String(this.plugin.settings.maxCardsPerNote)).onChange(async (value) => {
+    new import_obsidian3.Setting(containerEl).setName(SETTINGS_COPY.maxCardsPerNote.name).setDesc(SETTINGS_COPY.maxCardsPerNote.description).addText((text) => text.setPlaceholder(SETTINGS_COPY.maxCardsPerNote.placeholder).setValue(String(this.plugin.settings.maxCardsPerNote)).onChange(async (value) => {
       const parsed = parsePositiveInteger(value);
       if (parsed !== null) {
         await updateSetting(this.plugin.settings, "maxCardsPerNote", parsed, async () => this.plugin.saveSettings());
       }
     }));
-    new import_obsidian2.Setting(containerEl).setName(SETTINGS_COPY.summaryLength.name).setDesc(SETTINGS_COPY.summaryLength.description).addText((text) => text.setPlaceholder(SETTINGS_COPY.summaryLength.placeholder).setValue(String(this.plugin.settings.summaryLength)).onChange(async (value) => {
+    new import_obsidian3.Setting(containerEl).setName(SETTINGS_COPY.aiProvider.name).setDesc(SETTINGS_COPY.aiProvider.description).addDropdown((dropdown) => {
+      for (const option of getAiProviderOptions()) {
+        dropdown.addOption(option.value, option.label);
+      }
+      dropdown.setValue(this.plugin.settings.aiProvider).onChange(async (value) => {
+        const nextProvider = value;
+        const currentProvider = this.plugin.settings.aiProvider;
+        const currentApiUrl = this.plugin.settings.aiApiUrl.trim();
+        const currentDefaultApiUrl = getDefaultAiApiUrl(currentProvider);
+        const shouldUpdateApiUrl = currentApiUrl.length === 0 || currentApiUrl === currentDefaultApiUrl;
+        this.plugin.settings.aiProvider = nextProvider;
+        if (shouldUpdateApiUrl) {
+          this.plugin.settings.aiApiUrl = getDefaultAiApiUrl(nextProvider);
+        }
+        await this.plugin.saveSettings();
+        this.display();
+      });
+    });
+    new import_obsidian3.Setting(containerEl).setName(SETTINGS_COPY.aiApiUrl.name).setDesc(SETTINGS_COPY.aiApiUrl.description).addText((text) => text.setPlaceholder(getDefaultAiApiUrl(this.plugin.settings.aiProvider)).setValue(this.plugin.settings.aiApiUrl).onChange(async (value) => {
+      await updateSetting(this.plugin.settings, "aiApiUrl", value.trim(), async () => this.plugin.saveSettings());
+    }));
+    new import_obsidian3.Setting(containerEl).setName(SETTINGS_COPY.aiApiKey.name).setDesc(SETTINGS_COPY.aiApiKey.description).addText((text) => text.setPlaceholder(SETTINGS_COPY.aiApiKey.placeholder).setValue(this.plugin.settings.aiApiKey).onChange(async (value) => {
+      await updateSetting(this.plugin.settings, "aiApiKey", value.trim(), async () => this.plugin.saveSettings());
+    }));
+    new import_obsidian3.Setting(containerEl).setName(SETTINGS_COPY.aiModel.name).setDesc(SETTINGS_COPY.aiModel.description).addText((text) => text.setPlaceholder(SETTINGS_COPY.aiModel.placeholder).setValue(this.plugin.settings.aiModel).onChange(async (value) => {
+      await updateSetting(this.plugin.settings, "aiModel", value.trim(), async () => this.plugin.saveSettings());
+    }));
+    new import_obsidian3.Setting(containerEl).setName(SETTINGS_COPY.aiPrompt.name).setDesc(SETTINGS_COPY.aiPrompt.description).addTextArea((text) => text.setPlaceholder(SETTINGS_COPY.aiPrompt.placeholder).setValue(this.plugin.settings.aiPrompt).onChange(async (value) => {
+      await updateSetting(this.plugin.settings, "aiPrompt", value.trim(), async () => this.plugin.saveSettings());
+    }));
+    new import_obsidian3.Setting(containerEl).setName(SETTINGS_COPY.aiConnectionTest.name).setDesc(SETTINGS_COPY.aiConnectionTest.description).addButton((button) => button.setButtonText(SETTINGS_COPY.aiConnectionTest.button).onClick(async () => {
+      try {
+        await testAiConnection(this.plugin.settings);
+        new import_obsidian3.Notice(SETTINGS_COPY.aiConnectionTest.success);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : void 0;
+        new import_obsidian3.Notice(SETTINGS_COPY.aiConnectionTest.failed(detail));
+      }
+    }));
+    new import_obsidian3.Setting(containerEl).setName(SETTINGS_COPY.summaryLength.name).setDesc(SETTINGS_COPY.summaryLength.description).addText((text) => text.setPlaceholder(SETTINGS_COPY.summaryLength.placeholder).setValue(String(this.plugin.settings.summaryLength)).onChange(async (value) => {
       const parsed = parsePositiveInteger(value);
       if (parsed !== null) {
         await updateSetting(this.plugin.settings, "summaryLength", parsed, async () => this.plugin.saveSettings());
       }
     }));
-    new import_obsidian2.Setting(containerEl).setName(SETTINGS_COPY.newCardsPerDay.name).setDesc(SETTINGS_COPY.newCardsPerDay.description).addText((text) => text.setPlaceholder(SETTINGS_COPY.newCardsPerDay.placeholder).setValue(String(this.plugin.settings.newCardsPerDay)).onChange(async (value) => {
+    new import_obsidian3.Setting(containerEl).setName(SETTINGS_COPY.newCardsPerDay.name).setDesc(SETTINGS_COPY.newCardsPerDay.description).addText((text) => text.setPlaceholder(SETTINGS_COPY.newCardsPerDay.placeholder).setValue(String(this.plugin.settings.newCardsPerDay)).onChange(async (value) => {
       const parsed = parseNonNegativeInteger(value);
       if (parsed !== null) {
         await updateSetting(this.plugin.settings, "newCardsPerDay", parsed, async () => this.plugin.saveSettings());
       }
     }));
-    new import_obsidian2.Setting(containerEl).setName(SETTINGS_COPY.learningStepsMinutes.name).setDesc(SETTINGS_COPY.learningStepsMinutes.description).addText((text) => text.setPlaceholder(SETTINGS_COPY.learningStepsMinutes.placeholder).setValue(this.plugin.settings.learningStepsMinutes.join(",")).onChange(async (value) => {
+    new import_obsidian3.Setting(containerEl).setName(SETTINGS_COPY.learningStepsMinutes.name).setDesc(SETTINGS_COPY.learningStepsMinutes.description).addText((text) => text.setPlaceholder(SETTINGS_COPY.learningStepsMinutes.placeholder).setValue(this.plugin.settings.learningStepsMinutes.join(",")).onChange(async (value) => {
       const steps = parsePositiveIntegerList(value);
       if (steps.length > 0) {
         await updateSetting(this.plugin.settings, "learningStepsMinutes", steps, async () => this.plugin.saveSettings());
       }
     }));
-    new import_obsidian2.Setting(containerEl).setName(SETTINGS_COPY.graduatingIntervalDays.name).setDesc(SETTINGS_COPY.graduatingIntervalDays.description).addText((text) => text.setPlaceholder(SETTINGS_COPY.graduatingIntervalDays.placeholder).setValue(String(this.plugin.settings.graduatingIntervalDays)).onChange(async (value) => {
+    new import_obsidian3.Setting(containerEl).setName(SETTINGS_COPY.graduatingIntervalDays.name).setDesc(SETTINGS_COPY.graduatingIntervalDays.description).addText((text) => text.setPlaceholder(SETTINGS_COPY.graduatingIntervalDays.placeholder).setValue(String(this.plugin.settings.graduatingIntervalDays)).onChange(async (value) => {
       const parsed = parsePositiveInteger(value);
       if (parsed !== null) {
         await updateSetting(this.plugin.settings, "graduatingIntervalDays", parsed, async () => this.plugin.saveSettings());
       }
     }));
-    new import_obsidian2.Setting(containerEl).setName(SETTINGS_COPY.easyIntervalDays.name).setDesc(SETTINGS_COPY.easyIntervalDays.description).addText((text) => text.setPlaceholder(SETTINGS_COPY.easyIntervalDays.placeholder).setValue(String(this.plugin.settings.easyIntervalDays)).onChange(async (value) => {
+    new import_obsidian3.Setting(containerEl).setName(SETTINGS_COPY.easyIntervalDays.name).setDesc(SETTINGS_COPY.easyIntervalDays.description).addText((text) => text.setPlaceholder(SETTINGS_COPY.easyIntervalDays.placeholder).setValue(String(this.plugin.settings.easyIntervalDays)).onChange(async (value) => {
       const parsed = parsePositiveInteger(value);
       if (parsed !== null) {
         await updateSetting(this.plugin.settings, "easyIntervalDays", parsed, async () => this.plugin.saveSettings());
       }
     }));
-    new import_obsidian2.Setting(containerEl).setName(SETTINGS_COPY.showAllCardsInReview.name).setDesc(SETTINGS_COPY.showAllCardsInReview.description).addToggle((toggle) => toggle.setValue(this.plugin.settings.showAllCardsInReview).onChange(async (value) => {
+    new import_obsidian3.Setting(containerEl).setName(SETTINGS_COPY.showAllCardsInReview.name).setDesc(SETTINGS_COPY.showAllCardsInReview.description).addToggle((toggle) => toggle.setValue(this.plugin.settings.showAllCardsInReview).onChange(async (value) => {
       await updateSetting(this.plugin.settings, "showAllCardsInReview", value, async () => this.plugin.saveSettings());
     }));
-    new import_obsidian2.Setting(containerEl).setName(SETTINGS_COPY.ignoredFolders.name).setDesc(SETTINGS_COPY.ignoredFolders.description).addTextArea((text) => text.setPlaceholder(SETTINGS_COPY.ignoredFolders.placeholder).setValue(this.plugin.settings.ignoredFolders.join(",")).onChange(async (value) => {
+    new import_obsidian3.Setting(containerEl).setName(SETTINGS_COPY.ignoredFolders.name).setDesc(SETTINGS_COPY.ignoredFolders.description).addTextArea((text) => text.setPlaceholder(SETTINGS_COPY.ignoredFolders.placeholder).setValue(this.plugin.settings.ignoredFolders.join(",")).onChange(async (value) => {
       await updateSetting(this.plugin.settings, "ignoredFolders", parseStringList(value), async () => this.plugin.saveSettings());
     }));
-    new import_obsidian2.Setting(containerEl).setName(SETTINGS_COPY.resetCards.name).setDesc(SETTINGS_COPY.resetCards.description).addButton((button) => button.setButtonText(SETTINGS_COPY.resetCards.name).setWarning().onClick(async () => {
+    new import_obsidian3.Setting(containerEl).setName(SETTINGS_COPY.resetCards.name).setDesc(SETTINGS_COPY.resetCards.description).addButton((button) => button.setButtonText(SETTINGS_COPY.resetCards.name).setWarning().onClick(async () => {
       await this.plugin.resetAllCards();
     }));
-    new import_obsidian2.Setting(containerEl).setName(SETTINGS_COPY.resetSettings.name).setDesc(SETTINGS_COPY.resetSettings.description).addButton((button) => button.setButtonText(SETTINGS_COPY.resetSettings.name).onClick(async () => {
+    new import_obsidian3.Setting(containerEl).setName(SETTINGS_COPY.resetSettings.name).setDesc(SETTINGS_COPY.resetSettings.description).addButton((button) => button.setButtonText(SETTINGS_COPY.resetSettings.name).onClick(async () => {
       await this.plugin.resetSettingsToDefault();
       this.display();
     }));
@@ -648,7 +1036,7 @@ var NoteFlashcardsSettingTab = class extends import_obsidian2.PluginSettingTab {
 };
 
 // src/reviewView.ts
-var import_obsidian3 = require("obsidian");
+var import_obsidian4 = require("obsidian");
 
 // src/reviewCopy.ts
 var REVIEW_COPY = {
@@ -912,7 +1300,7 @@ function getStudyDisplayState(input) {
 
 // src/reviewView.ts
 var REVIEW_VIEW_TYPE = "note-flashcards-review";
-var ReviewView = class _ReviewView extends import_obsidian3.ItemView {
+var ReviewView = class _ReviewView extends import_obsidian4.ItemView {
   constructor(leaf, generationService, cardStore, getCurrentPath, getCurrentFolderPath) {
     super(leaf);
     this.generationService = generationService;
@@ -1046,7 +1434,7 @@ var ReviewView = class _ReviewView extends import_obsidian3.ItemView {
       (path) => this.generationService.getFileByPath(path),
       (file) => this.generationService.generateForFile(file),
       () => this.reloadCards(),
-      (message) => new import_obsidian3.Notice(message)
+      (message) => new import_obsidian4.Notice(message)
     );
   }
   async generateForCurrentFolder() {
@@ -1054,7 +1442,7 @@ var ReviewView = class _ReviewView extends import_obsidian3.ItemView {
       this.getCurrentFolderPath,
       (folderPath) => this.generationService.generateForFolder(folderPath),
       () => this.reloadCards(),
-      (message) => new import_obsidian3.Notice(message)
+      (message) => new import_obsidian4.Notice(message)
     );
   }
   async openFileAtSource(file, card) {
@@ -1076,7 +1464,7 @@ var ReviewView = class _ReviewView extends import_obsidian3.ItemView {
       card,
       (path) => this.generationService.getFileByPath(path),
       async (file, sourceCard) => await this.openFileAtSource(file, sourceCard),
-      (message) => new import_obsidian3.Notice(message)
+      (message) => new import_obsidian4.Notice(message)
     );
   }
   async toggleMistakeBook(card) {
@@ -1084,7 +1472,7 @@ var ReviewView = class _ReviewView extends import_obsidian3.ItemView {
       card,
       (cardId, inMistakeBook) => this.cardStore.setMistakeBook(cardId, inMistakeBook),
       (preferredCardId, preferredIndex) => this.reloadCards(preferredCardId, preferredIndex),
-      (message) => new import_obsidian3.Notice(message),
+      (message) => new import_obsidian4.Notice(message),
       this.index
     );
   }
@@ -1100,7 +1488,7 @@ var ReviewView = class _ReviewView extends import_obsidian3.ItemView {
     await clearMasteredMistakeCardsAction(
       () => this.cardStore.clearMasteredMistakeCards(),
       () => this.reloadCards(),
-      (message) => new import_obsidian3.Notice(message)
+      (message) => new import_obsidian4.Notice(message)
     );
   }
   getDisplayState() {
@@ -1123,10 +1511,10 @@ var ReviewView = class _ReviewView extends import_obsidian3.ItemView {
     }
     const actions = emptyState.createDiv({ cls: "note-flashcards-empty-actions" });
     if (emptyStateView.showGenerateCurrentNote) {
-      new import_obsidian3.ButtonComponent(actions).setButtonText(REVIEW_COPY.buttons.generateCurrentNote).onClick(async () => await this.generateForCurrentNote()).buttonEl.addClass("mod-cta");
+      new import_obsidian4.ButtonComponent(actions).setButtonText(REVIEW_COPY.buttons.generateCurrentNote).onClick(async () => await this.generateForCurrentNote()).buttonEl.addClass("mod-cta");
     }
     if (emptyStateView.showGenerateCurrentFolder) {
-      new import_obsidian3.ButtonComponent(actions).setButtonText(REVIEW_COPY.buttons.generateCurrentFolder).onClick(async () => await this.generateForCurrentFolder());
+      new import_obsidian4.ButtonComponent(actions).setButtonText(REVIEW_COPY.buttons.generateCurrentFolder).onClick(async () => await this.generateForCurrentFolder());
     }
   }
   renderToolbar(contentEl, display) {
@@ -1134,42 +1522,42 @@ var ReviewView = class _ReviewView extends import_obsidian3.ItemView {
     const filterGroup = toolbar.createDiv({ cls: "note-flashcards-toolbar-group" });
     const generateGroup = toolbar.createDiv({ cls: "note-flashcards-toolbar-group" });
     const utilityGroup = toolbar.createDiv({ cls: "note-flashcards-toolbar-group" });
-    new import_obsidian3.Setting(filterGroup).setName(REVIEW_COPY.study.scopeLabel).addDropdown((dropdown) => {
+    new import_obsidian4.Setting(filterGroup).setName(REVIEW_COPY.study.scopeLabel).addDropdown((dropdown) => {
       display.toolbar.scopeOptions.forEach((option) => dropdown.addOption(option.value, option.label));
       dropdown.setValue(this.studyScope).onChange(async (value) => {
         this.studyScope = value;
         await this.reloadCards();
       });
     });
-    new import_obsidian3.Setting(filterGroup).setName(REVIEW_COPY.study.countModeLabel).addDropdown((dropdown) => {
+    new import_obsidian4.Setting(filterGroup).setName(REVIEW_COPY.study.countModeLabel).addDropdown((dropdown) => {
       display.toolbar.countModeOptions.forEach((option) => dropdown.addOption(option.value, option.label));
       dropdown.setValue(this.countMode).onChange(async (value) => {
         this.countMode = value;
         await this.reloadCards();
       });
     });
-    new import_obsidian3.Setting(filterGroup).setName(REVIEW_COPY.study.orderModeLabel).addDropdown((dropdown) => {
+    new import_obsidian4.Setting(filterGroup).setName(REVIEW_COPY.study.orderModeLabel).addDropdown((dropdown) => {
       display.toolbar.orderModeOptions.forEach((option) => dropdown.addOption(option.value, option.label));
       dropdown.setValue(this.orderMode).onChange(async (value) => {
         this.orderMode = value;
         await this.reloadCards();
       });
     });
-    new import_obsidian3.Setting(filterGroup).setName(REVIEW_COPY.study.onlyMistakesLabel).addToggle((toggle) => toggle.setValue(this.includeMistakeBookOnly).onChange(async (value) => {
+    new import_obsidian4.Setting(filterGroup).setName(REVIEW_COPY.study.onlyMistakesLabel).addToggle((toggle) => toggle.setValue(this.includeMistakeBookOnly).onChange(async (value) => {
       this.includeMistakeBookOnly = value;
       await this.reloadCards();
     }));
-    new import_obsidian3.Setting(filterGroup).setName(REVIEW_COPY.study.excludeMasteredLabel).addToggle((toggle) => toggle.setValue(this.excludeMastered).onChange(async (value) => {
+    new import_obsidian4.Setting(filterGroup).setName(REVIEW_COPY.study.excludeMasteredLabel).addToggle((toggle) => toggle.setValue(this.excludeMastered).onChange(async (value) => {
       this.excludeMastered = value;
       await this.reloadCards();
     }));
-    new import_obsidian3.ButtonComponent(utilityGroup).setButtonText(REVIEW_COPY.buttons.refreshQueue).onClick(async () => {
+    new import_obsidian4.ButtonComponent(utilityGroup).setButtonText(REVIEW_COPY.buttons.refreshQueue).onClick(async () => {
       await this.reloadCards();
-      new import_obsidian3.Notice(REVIEW_COPY.notices.refreshed);
+      new import_obsidian4.Notice(REVIEW_COPY.notices.refreshed);
     });
-    new import_obsidian3.ButtonComponent(utilityGroup).setButtonText(REVIEW_COPY.buttons.clearMasteredMistakes).onClick(async () => await this.clearMasteredMistakeCards());
-    new import_obsidian3.ButtonComponent(generateGroup).setButtonText(REVIEW_COPY.buttons.generateCurrentNote).onClick(async () => await this.generateForCurrentNote()).buttonEl.addClass("mod-cta", "note-flashcards-toolbar-primary");
-    new import_obsidian3.ButtonComponent(generateGroup).setButtonText(REVIEW_COPY.buttons.generateCurrentFolder).onClick(async () => await this.generateForCurrentFolder()).buttonEl.addClass("note-flashcards-toolbar-primary");
+    new import_obsidian4.ButtonComponent(utilityGroup).setButtonText(REVIEW_COPY.buttons.clearMasteredMistakes).onClick(async () => await this.clearMasteredMistakeCards());
+    new import_obsidian4.ButtonComponent(generateGroup).setButtonText(REVIEW_COPY.buttons.generateCurrentNote).onClick(async () => await this.generateForCurrentNote()).buttonEl.addClass("mod-cta", "note-flashcards-toolbar-primary");
+    new import_obsidian4.ButtonComponent(generateGroup).setButtonText(REVIEW_COPY.buttons.generateCurrentFolder).onClick(async () => await this.generateForCurrentFolder()).buttonEl.addClass("note-flashcards-toolbar-primary");
   }
   renderMeta(contentEl, display) {
     contentEl.createDiv({ cls: "note-flashcards-meta", text: display.selectionSummary });
@@ -1190,10 +1578,10 @@ var ReviewView = class _ReviewView extends import_obsidian3.ItemView {
   }
   renderActions(contentEl, card, cardView) {
     const actions = contentEl.createDiv({ cls: "note-flashcards-actions" });
-    new import_obsidian3.ButtonComponent(actions).setButtonText(cardView.flipButtonLabel).onClick(() => this.toggleCardFace()).buttonEl.addClass("mod-cta");
-    new import_obsidian3.ButtonComponent(actions).setButtonText(REVIEW_COPY.buttons.openSource).onClick(async () => await this.openSourceNote(card));
-    new import_obsidian3.ButtonComponent(actions).setButtonText(cardView.mistakeToggleLabel).onClick(async () => await this.toggleMistakeBook(card)).buttonEl.addClass(cardView.mistakeToggleClass);
-    new import_obsidian3.ButtonComponent(actions).setButtonText(cardView.masteredToggleLabel).onClick(async () => await this.toggleMastered(card)).buttonEl.addClass(cardView.masteredToggleClass);
+    new import_obsidian4.ButtonComponent(actions).setButtonText(cardView.flipButtonLabel).onClick(() => this.toggleCardFace()).buttonEl.addClass("mod-cta");
+    new import_obsidian4.ButtonComponent(actions).setButtonText(REVIEW_COPY.buttons.openSource).onClick(async () => await this.openSourceNote(card));
+    new import_obsidian4.ButtonComponent(actions).setButtonText(cardView.mistakeToggleLabel).onClick(async () => await this.toggleMistakeBook(card)).buttonEl.addClass(cardView.mistakeToggleClass);
+    new import_obsidian4.ButtonComponent(actions).setButtonText(cardView.masteredToggleLabel).onClick(async () => await this.toggleMastered(card)).buttonEl.addClass(cardView.masteredToggleClass);
   }
   renderNavigation(contentEl, display) {
     if (!display.navigationLabel) {
@@ -1201,8 +1589,8 @@ var ReviewView = class _ReviewView extends import_obsidian3.ItemView {
     }
     const nav = contentEl.createDiv({ cls: "note-flashcards-nav" });
     nav.createDiv({ cls: "note-flashcards-nav-label", text: display.navigationLabel });
-    new import_obsidian3.ButtonComponent(nav).setButtonText(REVIEW_COPY.buttons.previous).onClick(() => this.showPrevious());
-    new import_obsidian3.ButtonComponent(nav).setButtonText(REVIEW_COPY.buttons.next).onClick(() => this.showNext());
+    new import_obsidian4.ButtonComponent(nav).setButtonText(REVIEW_COPY.buttons.previous).onClick(() => this.showPrevious());
+    new import_obsidian4.ButtonComponent(nav).setButtonText(REVIEW_COPY.buttons.next).onClick(() => this.showNext());
   }
   render() {
     const { contentEl } = this;
@@ -1288,7 +1676,7 @@ function buildSavedPluginData(data, settings) {
 }
 
 // main.ts
-var NoteFlashcardsPlugin = class extends import_obsidian4.Plugin {
+var NoteFlashcardsPlugin = class extends import_obsidian5.Plugin {
   constructor(app, manifest) {
     super(app, manifest);
     this.settings = DEFAULT_SETTINGS;
@@ -1312,7 +1700,7 @@ var NoteFlashcardsPlugin = class extends import_obsidian4.Plugin {
       await this.activateReviewView();
     });
     this.registerEvent(this.app.workspace.on("file-menu", (menu, file, _source, _leaf) => {
-      if (!(file instanceof import_obsidian4.TFile)) {
+      if (!(file instanceof import_obsidian5.TFile)) {
         return;
       }
       menu.addItem((item) => item.setTitle(PLUGIN_COPY.menu.generateCurrentNote).setIcon("sparkles").onClick(async () => {
@@ -1384,12 +1772,12 @@ var NoteFlashcardsPlugin = class extends import_obsidian4.Plugin {
   }
   async resetAllCards() {
     await this.store.resetCards();
-    new import_obsidian4.Notice(PLUGIN_COPY.notices.resetCardsDone);
+    new import_obsidian5.Notice(PLUGIN_COPY.notices.resetCardsDone);
   }
   async resetSettingsToDefault() {
     this.settings = { ...DEFAULT_SETTINGS };
     await this.saveSettings();
-    new import_obsidian4.Notice(PLUGIN_COPY.notices.resetSettingsDone);
+    new import_obsidian5.Notice(PLUGIN_COPY.notices.resetSettingsDone);
   }
   async generateFileAndOpenReview(file) {
     await this.generationService.generateForFile(file);
@@ -1407,14 +1795,14 @@ var NoteFlashcardsPlugin = class extends import_obsidian4.Plugin {
   }
   requireCurrentFile(file = this.app.workspace.getActiveFile()) {
     if (!file) {
-      new import_obsidian4.Notice(PLUGIN_COPY.notices.noCurrentNote);
+      new import_obsidian5.Notice(PLUGIN_COPY.notices.noCurrentNote);
       return null;
     }
     return file;
   }
   requireCurrentFolder(folder = this.app.workspace.getActiveFile()?.parent) {
     if (!folder) {
-      new import_obsidian4.Notice(PLUGIN_COPY.notices.noCurrentFolder);
+      new import_obsidian5.Notice(PLUGIN_COPY.notices.noCurrentFolder);
       return null;
     }
     return folder;
@@ -1433,7 +1821,7 @@ var NoteFlashcardsPlugin = class extends import_obsidian4.Plugin {
       this.app.workspace.getLeavesOfType(REVIEW_VIEW_TYPE)[0],
       (split) => this.app.workspace.getRightLeaf(split),
       (leaf) => this.app.workspace.revealLeaf(leaf),
-      (message) => new import_obsidian4.Notice(message),
+      (message) => new import_obsidian5.Notice(message),
       REVIEW_VIEW_TYPE
     );
   }

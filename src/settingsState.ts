@@ -1,4 +1,12 @@
-import type { GeneratorMode, NoteFlashcardsSettings } from "./types";
+import type { AiProvider, GeneratorMode, NoteFlashcardsSettings } from "./types";
+
+const DEFAULT_AI_API_URLS: Record<AiProvider, string> = {
+  "openai-compatible": "https://api.openai.com/v1/chat/completions",
+  openrouter: "https://openrouter.ai/api/v1/chat/completions",
+  "azure-openai": "https://{resource}.openai.azure.com/openai/deployments/{model}/chat/completions?api-version=2024-06-01",
+  anthropic: "https://api.anthropic.com/v1/messages",
+  gemini: "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+};
 
 export const SETTINGS_COPY = {
   generatorMode: {
@@ -14,6 +22,44 @@ export const SETTINGS_COPY = {
     name: "每篇笔记最大卡片数",
     description: "限制单篇笔记生成的闪卡数量",
     placeholder: "12"
+  },
+  aiProvider: {
+    name: "AI Provider",
+    description: "选择要调用的模型平台",
+    options: {
+      "openai-compatible": "OpenAI 兼容",
+      openrouter: "OpenRouter",
+      "azure-openai": "Azure OpenAI",
+      anthropic: "Anthropic",
+      gemini: "Gemini"
+    }
+  },
+  aiApiUrl: {
+    name: "AI 接口地址",
+    description: "可自定义完整接口地址；Gemini 支持使用 {model} 占位符",
+    placeholder: "https://api.openai.com/v1/chat/completions"
+  },
+  aiApiKey: {
+    name: "AI API Key",
+    description: "用于调用 AI 模型，当前会随插件设置保存在本地",
+    placeholder: "sk-..."
+  },
+  aiModel: {
+    name: "AI 模型名",
+    description: "填写目标模型标识（Azure 场景填写 deployment 名称）",
+    placeholder: "gpt-4o-mini"
+  },
+  aiPrompt: {
+    name: "AI 附加提示词",
+    description: "可选，用于补充生成偏好；插件仍会强制要求返回 JSON",
+    placeholder: "例如：更偏向术语定义、对比题和步骤题"
+  },
+  aiConnectionTest: {
+    name: "AI 连接测试",
+    description: "使用当前 Provider、接口地址、API Key 和模型名进行一次连通性验证",
+    button: "测试连接",
+    success: "AI 连接测试成功",
+    failed: (detail?: string) => `AI 连接测试失败${detail ? `：${detail}` : ""}`
   },
   summaryLength: {
     name: "答案摘要长度",
@@ -86,6 +132,20 @@ export function getGeneratorModeOptions(): Array<{ value: GeneratorMode; label: 
     { value: "ai", label: SETTINGS_COPY.generatorMode.options.ai },
     { value: "hybrid", label: SETTINGS_COPY.generatorMode.options.hybrid }
   ];
+}
+
+export function getAiProviderOptions(): Array<{ value: AiProvider; label: string }> {
+  return [
+    { value: "openai-compatible", label: SETTINGS_COPY.aiProvider.options["openai-compatible"] },
+    { value: "openrouter", label: SETTINGS_COPY.aiProvider.options.openrouter },
+    { value: "azure-openai", label: SETTINGS_COPY.aiProvider.options["azure-openai"] },
+    { value: "anthropic", label: SETTINGS_COPY.aiProvider.options.anthropic },
+    { value: "gemini", label: SETTINGS_COPY.aiProvider.options.gemini }
+  ];
+}
+
+export function getDefaultAiApiUrl(provider: AiProvider): string {
+  return DEFAULT_AI_API_URLS[provider];
 }
 
 export async function updateSetting<K extends keyof NoteFlashcardsSettings>(
