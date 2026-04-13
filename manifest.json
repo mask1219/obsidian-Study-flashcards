@@ -1,0 +1,9 @@
+{
+  "id": "note-flashcards",
+  "name": "Note Flashcards",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Generate and review flashcards from note content.",
+  "author": "少爷",
+  "isDesktopOnly": false
+}

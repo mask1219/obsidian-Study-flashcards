@@ -1,0 +1,28 @@
+{
+  "name": "obsidian-flashcards-plugin",
+  "version": "1.0.0",
+  "description": "Obsidian plugin for generating and reviewing flashcards from notes",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "tsc --noEmit -skipLibCheck && node esbuild.config.mjs production",
+    "test": "vitest run"
+  },
+  "keywords": [
+    "obsidian",
+    "plugin",
+    "flashcards"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "obsidian": "^1.12.3"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "builtin-modules": "^5.1.0",
+    "esbuild": "^0.28.0",
+    "typescript": "^6.0.2",
+    "vitest": "^3.2.4"
+  }
+}

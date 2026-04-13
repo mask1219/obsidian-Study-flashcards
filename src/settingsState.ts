@@ -1,0 +1,99 @@
+import type { GeneratorMode, NoteFlashcardsSettings } from "./types";
+
+export const SETTINGS_COPY = {
+  generatorMode: {
+    name: "生成模式",
+    description: "选择规则生成、AI 生成或混合模式",
+    options: {
+      rule: "规则",
+      ai: "AI",
+      hybrid: "混合"
+    }
+  },
+  maxCardsPerNote: {
+    name: "每篇笔记最大卡片数",
+    description: "限制单篇笔记生成的闪卡数量",
+    placeholder: "12"
+  },
+  summaryLength: {
+    name: "答案摘要长度",
+    description: "控制答案文本的最大长度",
+    placeholder: "220"
+  },
+  newCardsPerDay: {
+    name: "每日新卡上限",
+    description: "限制复习页当天首次展示的新卡数量，不影响实际生成总数",
+    placeholder: "10"
+  },
+  learningStepsMinutes: {
+    name: "学习步进（分钟）",
+    description: "使用逗号分隔，例如 1,10",
+    placeholder: "1,10"
+  },
+  graduatingIntervalDays: {
+    name: "毕业间隔（天）",
+    description: "完成学习步进后的默认复习间隔",
+    placeholder: "1"
+  },
+  easyIntervalDays: {
+    name: "简单间隔（天）",
+    description: "点击“简单”后直接进入复习的间隔",
+    placeholder: "4"
+  },
+  showAllCardsInReview: {
+    name: "无到期卡时显示全部",
+    description: "当今天没有到期卡时，是否继续浏览全部卡片"
+  },
+  ignoredFolders: {
+    name: "忽略文件夹",
+    description: "使用逗号分隔多个文件夹前缀",
+    placeholder: "Templates/,Archive/"
+  },
+  resetCards: {
+    name: "重置所有卡片数据",
+    description: "清空当前插件保存的全部卡片、错题本和已掌握状态"
+  },
+  resetSettings: {
+    name: "恢复默认设置",
+    description: "将当前插件设置恢复为默认值"
+  }
+} as const;
+
+export function parsePositiveInteger(value: string): number | null {
+  const parsed = Number(value);
+  return !Number.isNaN(parsed) && parsed > 0 ? parsed : null;
+}
+
+export function parseNonNegativeInteger(value: string): number | null {
+  const parsed = Number(value);
+  return !Number.isNaN(parsed) && parsed >= 0 ? parsed : null;
+}
+
+export function parsePositiveIntegerList(value: string): number[] {
+  return value
+    .split(",")
+    .map((item) => Number(item.trim()))
+    .filter((item) => !Number.isNaN(item) && item > 0);
+}
+
+export function parseStringList(value: string): string[] {
+  return value.split(",").map((item) => item.trim()).filter(Boolean);
+}
+
+export function getGeneratorModeOptions(): Array<{ value: GeneratorMode; label: string }> {
+  return [
+    { value: "rule", label: SETTINGS_COPY.generatorMode.options.rule },
+    { value: "ai", label: SETTINGS_COPY.generatorMode.options.ai },
+    { value: "hybrid", label: SETTINGS_COPY.generatorMode.options.hybrid }
+  ];
+}
+
+export async function updateSetting<K extends keyof NoteFlashcardsSettings>(
+  settings: NoteFlashcardsSettings,
+  key: K,
+  value: NoteFlashcardsSettings[K],
+  saveSettings: () => Promise<void>
+): Promise<void> {
+  settings[key] = value;
+  await saveSettings();
+}

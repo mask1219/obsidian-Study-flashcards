@@ -1,0 +1,81 @@
+import { MISTAKE_AUTO_REMOVE_STREAK } from "./types";
+import type { CardState, Flashcard, ReviewRating } from "./types";
+
+export function normalizeCard(card: Flashcard): Flashcard {
+  const createdAt = card.createdAt ?? new Date().toISOString();
+  return {
+    ...card,
+    createdAt,
+    dueAt: card.dueAt ?? createdAt,
+    intervalDays: card.intervalDays ?? 0,
+    easeFactor: card.easeFactor ?? 2.5,
+    repetition: card.repetition ?? 0,
+    lapseCount: card.lapseCount ?? 0,
+    reviewCount: card.reviewCount ?? 0,
+    cardState: (card.cardState ?? "new") as CardState,
+    learningStep: card.learningStep ?? 0,
+    inMistakeBook: card.inMistakeBook ?? false,
+    isMastered: card.isMastered ?? false,
+    mistakeSuccessStreak: card.mistakeSuccessStreak ?? 0
+  };
+}
+
+export function clearMistakeBookState(card: Flashcard): Flashcard {
+  return {
+    ...card,
+    inMistakeBook: false,
+    mistakeSuccessStreak: 0
+  };
+}
+
+export function setMistakeBookState(card: Flashcard, inMistakeBook: boolean): Flashcard {
+  return {
+    ...card,
+    inMistakeBook,
+    isMastered: inMistakeBook ? false : card.isMastered,
+    mistakeSuccessStreak: 0
+  };
+}
+
+export function setMasteredState(card: Flashcard, isMastered: boolean): Flashcard {
+  return {
+    ...card,
+    isMastered,
+    inMistakeBook: isMastered ? false : card.inMistakeBook,
+    mistakeSuccessStreak: isMastered ? 0 : card.mistakeSuccessStreak
+  };
+}
+
+export function isMasteredMistakeCard(card: Flashcard): boolean {
+  return card.inMistakeBook && card.mistakeSuccessStreak >= MISTAKE_AUTO_REMOVE_STREAK;
+}
+
+export function updateMistakeBookState(card: Flashcard, rating: ReviewRating): Flashcard {
+  if (rating === "again") {
+    return setMistakeBookState(card, true);
+  }
+
+  if (!card.inMistakeBook) {
+    return {
+      ...card,
+      mistakeSuccessStreak: 0
+    };
+  }
+
+  if (rating === "hard") {
+    return {
+      ...card,
+      mistakeSuccessStreak: 0
+    };
+  }
+
+  const mistakeSuccessStreak = card.mistakeSuccessStreak + 1;
+  if (mistakeSuccessStreak >= MISTAKE_AUTO_REMOVE_STREAK) {
+    return clearMistakeBookState(card);
+  }
+
+  return {
+    ...card,
+    mistakeSuccessStreak
+  };
+}
