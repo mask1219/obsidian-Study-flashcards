@@ -1,5 +1,5 @@
 import { MISTAKE_AUTO_REMOVE_STREAK } from "./types";
-import type { CardState, Flashcard, ReviewRating } from "./types";
+import type { CardState, Flashcard } from "./types";
 
 export function normalizeCard(card: Flashcard): Flashcard {
   const createdAt = card.createdAt ?? new Date().toISOString();
@@ -48,34 +48,4 @@ export function setMasteredState(card: Flashcard, isMastered: boolean): Flashcar
 
 export function isMasteredMistakeCard(card: Flashcard): boolean {
   return card.inMistakeBook && card.mistakeSuccessStreak >= MISTAKE_AUTO_REMOVE_STREAK;
-}
-
-export function updateMistakeBookState(card: Flashcard, rating: ReviewRating): Flashcard {
-  if (rating === "again") {
-    return setMistakeBookState(card, true);
-  }
-
-  if (!card.inMistakeBook) {
-    return {
-      ...card,
-      mistakeSuccessStreak: 0
-    };
-  }
-
-  if (rating === "hard") {
-    return {
-      ...card,
-      mistakeSuccessStreak: 0
-    };
-  }
-
-  const mistakeSuccessStreak = card.mistakeSuccessStreak + 1;
-  if (mistakeSuccessStreak >= MISTAKE_AUTO_REMOVE_STREAK) {
-    return clearMistakeBookState(card);
-  }
-
-  return {
-    ...card,
-    mistakeSuccessStreak
-  };
 }

@@ -5,8 +5,60 @@ import { GENERATION_COPY, generateCardsForSections } from "./generationStrategy"
 import { getStudySession } from "./studySession";
 import type { Flashcard, NoteFlashcardsSettings, StudySessionOptions, StudySessionResult } from "./types";
 
+function normalizeFolderPath(folderPath: string): string {
+  return folderPath.endsWith("/") ? folderPath : `${folderPath}/`;
+}
+
+function isInFolder(filePath: string, folderPath: string): boolean {
+  if (folderPath.trim() === "") {
+    return true;
+  }
+  const normalizedFolderPath = normalizeFolderPath(folderPath);
+  return filePath.startsWith(normalizedFolderPath);
+}
+
 function isIgnored(path: string, ignoredFolders: string[]): boolean {
-  return ignoredFolders.some((folder) => path.startsWith(folder));
+  return ignoredFolders.some((folder) => isInFolder(path, folder));
+}
+
+function isDueCard(card: Flashcard, now: Date): boolean {
+  const dueTime = Date.parse(card.dueAt);
+  if (Number.isNaN(dueTime)) {
+    return true;
+  }
+  return dueTime <= now.getTime();
+}
+
+function toTimestamp(value: string): number {
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+function buildDueQueue(cards: Flashcard[], settings: NoteFlashcardsSettings, now: Date): Flashcard[] {
+  const dueCards = cards.filter((card) => isDueCard(card, now));
+  if (dueCards.length === 0) {
+    return settings.showAllCardsInReview ? cards : [];
+  }
+
+  const dueReviewCards = dueCards.filter((card) => card.cardState !== "new");
+  const dueNewCards = dueCards
+    .filter((card) => card.cardState === "new")
+    .sort((a, b) => toTimestamp(a.createdAt) - toTimestamp(b.createdAt));
+  const newCardsPerDay = Math.max(0, settings.newCardsPerDay);
+  const limitedDueNewCards = newCardsPerDay > 0 ? dueNewCards.slice(0, newCardsPerDay) : [];
+
+  return [...dueReviewCards, ...limitedDueNewCards];
+}
+
+function applyStudyFilters(cards: Flashcard[], options: StudySessionOptions): Flashcard[] {
+  let filteredCards = [...cards];
+  if (options.includeMistakeBookOnly) {
+    filteredCards = filteredCards.filter((card) => card.inMistakeBook);
+  }
+  if (options.excludeMastered) {
+    filteredCards = filteredCards.filter((card) => !card.isMastered);
+  }
+  return filteredCards;
 }
 
 export class GenerationService {
@@ -30,7 +82,7 @@ export class GenerationService {
 
   async generateForFolder(folderPath: string): Promise<number> {
     const settings = this.settings();
-    const files = this.vault.getMarkdownFiles().filter((file) => file.path.startsWith(folderPath) && !isIgnored(file.path, settings.ignoredFolders));
+    const files = this.vault.getMarkdownFiles().filter((file) => isInFolder(file.path, folderPath) && !isIgnored(file.path, settings.ignoredFolders));
     let total = 0;
 
     for (const file of files) {
@@ -49,11 +101,13 @@ export class GenerationService {
     if (mode === "current") {
       return allCards.filter((card) => card.sourcePath === path);
     }
-    return allCards.filter((card) => card.sourcePath.startsWith(path));
+    return allCards.filter((card) => isInFolder(card.sourcePath, path));
   }
 
   async getStudySession(options: StudySessionOptions, sessionCardIds?: string[]): Promise<StudySessionResult> {
     const cards = await this.getCardsForSource(options.scope, options.sourcePath);
-    return getStudySession(cards, options, Math.random, sessionCardIds);
+    const filteredCards = applyStudyFilters(cards, options);
+    const reviewQueue = buildDueQueue(filteredCards, this.settings(), new Date());
+    return getStudySession(reviewQueue, options, Math.random, sessionCardIds);
   }
 }

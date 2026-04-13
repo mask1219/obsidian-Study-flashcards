@@ -1,5 +1,4 @@
 export type GeneratorMode = "rule" | "ai" | "hybrid";
-export type ReviewRating = "again" | "hard" | "good" | "easy";
 export type CardState = "new" | "learning" | "review";
 export type StudyScope = "current" | "folder" | "all";
 export type StudyCountMode = "random10" | "all";

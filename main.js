@@ -25,124 +25,6 @@ __export(main_exports, {
 module.exports = __toCommonJS(main_exports);
 var import_obsidian4 = require("obsidian");
 
-// src/scheduler.ts
-function addDays(base, days) {
-  const next = new Date(base);
-  next.setDate(next.getDate() + days);
-  return next.toISOString();
-}
-function addMinutes(base, minutes) {
-  const next = new Date(base);
-  next.setMinutes(next.getMinutes() + minutes);
-  return next.toISOString();
-}
-function getLearningStepMinutes(settings, step) {
-  const steps = settings.learningStepsMinutes.filter((value) => value > 0);
-  if (steps.length === 0) {
-    return 1;
-  }
-  return steps[Math.min(step, steps.length - 1)];
-}
-function graduateToReview(card, now, intervalDays, easeFactor) {
-  return {
-    ...card,
-    cardState: "review",
-    learningStep: 0,
-    dueAt: addDays(now, intervalDays),
-    intervalDays,
-    easeFactor: Math.max(1.3, Number(easeFactor.toFixed(2))),
-    repetition: Math.max(1, card.repetition + 1),
-    reviewCount: card.reviewCount + 1,
-    lastReviewedAt: now.toISOString()
-  };
-}
-function applyScheduledReview(card, rating, settings) {
-  const now = /* @__PURE__ */ new Date();
-  if (card.cardState === "new" || card.cardState === "learning") {
-    const currentStep = card.cardState === "new" ? 0 : card.learningStep;
-    if (rating === "again") {
-      return {
-        ...card,
-        cardState: "learning",
-        learningStep: 0,
-        dueAt: addMinutes(now, getLearningStepMinutes(settings, 0)),
-        reviewCount: card.reviewCount + 1,
-        lastReviewedAt: now.toISOString()
-      };
-    }
-    if (rating === "hard") {
-      const hardStep = Math.max(0, currentStep);
-      const minutes = Math.ceil(getLearningStepMinutes(settings, hardStep) * 1.5);
-      return {
-        ...card,
-        cardState: "learning",
-        learningStep: hardStep,
-        dueAt: addMinutes(now, minutes),
-        reviewCount: card.reviewCount + 1,
-        lastReviewedAt: now.toISOString()
-      };
-    }
-    if (rating === "good") {
-      const nextStep = currentStep + 1;
-      if (nextStep >= settings.learningStepsMinutes.length) {
-        return graduateToReview(card, now, settings.graduatingIntervalDays, card.easeFactor);
-      }
-      return {
-        ...card,
-        cardState: "learning",
-        learningStep: nextStep,
-        dueAt: addMinutes(now, getLearningStepMinutes(settings, nextStep)),
-        reviewCount: card.reviewCount + 1,
-        lastReviewedAt: now.toISOString()
-      };
-    }
-    return graduateToReview(card, now, settings.easyIntervalDays, card.easeFactor + 0.15);
-  }
-  let repetition = card.repetition;
-  let intervalDays = card.intervalDays;
-  let easeFactor = card.easeFactor;
-  let lapseCount = card.lapseCount;
-  if (rating === "again") {
-    lapseCount += 1;
-    return {
-      ...card,
-      cardState: "learning",
-      learningStep: 0,
-      dueAt: addMinutes(now, getLearningStepMinutes(settings, 0)),
-      intervalDays: 0,
-      repetition: 0,
-      lapseCount,
-      easeFactor: Math.max(1.3, Number((easeFactor - 0.2).toFixed(2))),
-      reviewCount: card.reviewCount + 1,
-      lastReviewedAt: now.toISOString()
-    };
-  }
-  if (rating === "hard") {
-    repetition += 1;
-    intervalDays = Math.max(2, Math.ceil(Math.max(1, intervalDays) * 1.2));
-    easeFactor = Math.max(1.3, easeFactor - 0.15);
-  } else if (rating === "good") {
-    repetition += 1;
-    intervalDays = repetition <= 2 ? Math.max(settings.graduatingIntervalDays, 1 + repetition) : Math.max(3, Math.ceil(Math.max(1, intervalDays) * easeFactor));
-  } else {
-    repetition += 1;
-    intervalDays = Math.max(settings.easyIntervalDays, Math.ceil(Math.max(1, intervalDays) * (easeFactor + 0.3)));
-    easeFactor += 0.15;
-  }
-  return {
-    ...card,
-    cardState: "review",
-    learningStep: 0,
-    dueAt: addDays(now, intervalDays),
-    intervalDays,
-    easeFactor: Math.max(1.3, Number(easeFactor.toFixed(2))),
-    repetition,
-    lapseCount,
-    reviewCount: card.reviewCount + 1,
-    lastReviewedAt: now.toISOString()
-  };
-}
-
 // src/settings.ts
 var DEFAULT_SETTINGS = {
   generatorMode: "rule",
@@ -204,36 +86,20 @@ function setMasteredState(card, isMastered) {
 function isMasteredMistakeCard(card) {
   return card.inMistakeBook && card.mistakeSuccessStreak >= MISTAKE_AUTO_REMOVE_STREAK;
 }
-function updateMistakeBookState(card, rating) {
-  if (rating === "again") {
-    return setMistakeBookState(card, true);
-  }
-  if (!card.inMistakeBook) {
-    return {
-      ...card,
-      mistakeSuccessStreak: 0
-    };
-  }
-  if (rating === "hard") {
-    return {
-      ...card,
-      mistakeSuccessStreak: 0
-    };
-  }
-  const mistakeSuccessStreak = card.mistakeSuccessStreak + 1;
-  if (mistakeSuccessStreak >= MISTAKE_AUTO_REMOVE_STREAK) {
-    return clearMistakeBookState(card);
-  }
-  return {
-    ...card,
-    mistakeSuccessStreak
-  };
-}
 
 // src/cardStore.ts
 var DEFAULT_DATA = {
   cards: []
 };
+function normalizePrefix(prefix) {
+  return prefix.endsWith("/") ? prefix : `${prefix}/`;
+}
+function hasPrefixPath(path, prefix) {
+  if (prefix.trim() === "") {
+    return true;
+  }
+  return path.startsWith(normalizePrefix(prefix));
+}
 var CardStore = class {
   constructor(loadData, saveData) {
     this.loadData = loadData;
@@ -269,7 +135,7 @@ var CardStore = class {
   }
   async getCardsByPrefix(prefix) {
     const cards = await this.getCards();
-    return cards.filter((card) => card.sourcePath.startsWith(prefix));
+    return cards.filter((card) => hasPrefixPath(card.sourcePath, prefix));
   }
   async setMistakeBook(cardId, inMistakeBook) {
     const data = await this.getData();
@@ -313,20 +179,6 @@ var CardStore = class {
   async resetCards() {
     const data = await this.getData();
     await this.saveData({ ...data, cards: [] });
-  }
-  async applyReview(cardId, rating) {
-    const data = await this.getData();
-    const settings = data.settings ?? DEFAULT_SETTINGS;
-    let reviewedCard = null;
-    const updated = data.cards.map((card) => {
-      if (card.id !== cardId) {
-        return card;
-      }
-      reviewedCard = updateMistakeBookState(applyScheduledReview(card, rating, settings), rating);
-      return reviewedCard;
-    });
-    await this.saveData({ ...data, cards: updated });
-    return reviewedCard;
   }
 };
 
@@ -396,10 +248,24 @@ async function generateAiFlashcards(_sections) {
 }
 
 // src/cardFactory.ts
+function hashText(input) {
+  let hash = 2166136261;
+  for (let index = 0; index < input.length; index += 1) {
+    hash ^= input.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+function buildCardId(question, answer, section) {
+  const startLine = section.sourceStartLine ?? 0;
+  const endLine = section.sourceEndLine ?? 0;
+  const fingerprint = hashText(`${section.heading}::${question}::${answer}`);
+  return `${section.sourcePath}::${startLine}-${endLine}::${fingerprint}`;
+}
 function createNewFlashcard(question, answer, section, generatorType) {
   const createdAt = (/* @__PURE__ */ new Date()).toISOString();
   return {
-    id: `${section.sourcePath}::${section.heading}::${question}`,
+    id: buildCardId(question, answer, section),
     question,
     answer,
     sourcePath: section.sourcePath,
@@ -532,8 +398,50 @@ function getStudySession(cards, options, random = Math.random, sessionCardIds) {
 }
 
 // src/generationService.ts
+function normalizeFolderPath(folderPath) {
+  return folderPath.endsWith("/") ? folderPath : `${folderPath}/`;
+}
+function isInFolder(filePath, folderPath) {
+  if (folderPath.trim() === "") {
+    return true;
+  }
+  const normalizedFolderPath = normalizeFolderPath(folderPath);
+  return filePath.startsWith(normalizedFolderPath);
+}
 function isIgnored(path, ignoredFolders) {
-  return ignoredFolders.some((folder) => path.startsWith(folder));
+  return ignoredFolders.some((folder) => isInFolder(path, folder));
+}
+function isDueCard(card, now) {
+  const dueTime = Date.parse(card.dueAt);
+  if (Number.isNaN(dueTime)) {
+    return true;
+  }
+  return dueTime <= now.getTime();
+}
+function toTimestamp(value) {
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+function buildDueQueue(cards, settings, now) {
+  const dueCards = cards.filter((card) => isDueCard(card, now));
+  if (dueCards.length === 0) {
+    return settings.showAllCardsInReview ? cards : [];
+  }
+  const dueReviewCards = dueCards.filter((card) => card.cardState !== "new");
+  const dueNewCards = dueCards.filter((card) => card.cardState === "new").sort((a, b) => toTimestamp(a.createdAt) - toTimestamp(b.createdAt));
+  const newCardsPerDay = Math.max(0, settings.newCardsPerDay);
+  const limitedDueNewCards = newCardsPerDay > 0 ? dueNewCards.slice(0, newCardsPerDay) : [];
+  return [...dueReviewCards, ...limitedDueNewCards];
+}
+function applyStudyFilters(cards, options) {
+  let filteredCards = [...cards];
+  if (options.includeMistakeBookOnly) {
+    filteredCards = filteredCards.filter((card) => card.inMistakeBook);
+  }
+  if (options.excludeMastered) {
+    filteredCards = filteredCards.filter((card) => !card.isMastered);
+  }
+  return filteredCards;
 }
 var GenerationService = class {
   constructor(vault, store, settings) {
@@ -556,7 +464,7 @@ var GenerationService = class {
   }
   async generateForFolder(folderPath) {
     const settings = this.settings();
-    const files = this.vault.getMarkdownFiles().filter((file) => file.path.startsWith(folderPath) && !isIgnored(file.path, settings.ignoredFolders));
+    const files = this.vault.getMarkdownFiles().filter((file) => isInFolder(file.path, folderPath) && !isIgnored(file.path, settings.ignoredFolders));
     let total = 0;
     for (const file of files) {
       total += await this.generateForFile(file);
@@ -572,11 +480,13 @@ var GenerationService = class {
     if (mode === "current") {
       return allCards.filter((card) => card.sourcePath === path);
     }
-    return allCards.filter((card) => card.sourcePath.startsWith(path));
+    return allCards.filter((card) => isInFolder(card.sourcePath, path));
   }
   async getStudySession(options, sessionCardIds) {
     const cards = await this.getCardsForSource(options.scope, options.sourcePath);
-    return getStudySession(cards, options, Math.random, sessionCardIds);
+    const filteredCards = applyStudyFilters(cards, options);
+    const reviewQueue = buildDueQueue(filteredCards, this.settings(), /* @__PURE__ */ new Date());
+    return getStudySession(reviewQueue, options, Math.random, sessionCardIds);
   }
 };
 
@@ -792,7 +702,7 @@ var REVIEW_COPY = {
     cardCount: (count) => `${count} \u5F20`
   },
   meta: {
-    shortcutHint: "\u7A7A\u683C\u7FFB\u9762 \xB7 \u2190 \u2192 \u5207\u6362 \xB7 1-4 \u8BC4\u5206",
+    shortcutHint: "\u7A7A\u683C\u7FFB\u9762 \xB7 \u2190 \u2192 \u5207\u6362",
     dueCount: "\u5F85\u590D\u4E60",
     queueCount: "\u5F53\u524D\u961F\u5217",
     sourceCount: "\u5F53\u524D\u6765\u6E90",
@@ -803,16 +713,9 @@ var REVIEW_COPY = {
     limitedNewCards: (totalNewCards, newCardLimit) => `\u5F53\u524D\u6765\u6E90\u5171\u6709 ${totalNewCards} \u5F20\u65B0\u5361\uFF0C\u6309\u6BCF\u65E5\u65B0\u5361\u4E0A\u9650\u4EC5\u5C55\u793A\u524D ${newCardLimit} \u5F20\u3002`,
     positionLabel: (index, total) => `${REVIEW_COPY.meta.position} ${index} \u5F20 / \u5171 ${total} \u5F20`
   },
-  ratings: {
-    again: "\u91CD\u6765",
-    hard: "\u56F0\u96BE",
-    good: "\u6B63\u5E38",
-    easy: "\u7B80\u5355",
-    hint: "\u7FFB\u5230\u7B54\u6848\u540E\u53EF\u76F4\u63A5\u8BC4\u5206\u3002"
-  },
   emptyState: {
     mistakesTitle: "\u9519\u9898\u672C\u76EE\u524D\u662F\u7A7A\u7684\u3002",
-    mistakesDescription: "\u590D\u4E60\u65F6\u70B9\u51FB\u201C\u91CD\u6765\u201D\u4F1A\u81EA\u52A8\u52A0\u5165\u9519\u9898\u672C\u3002",
+    mistakesDescription: "\u4F60\u53EF\u4EE5\u5728\u5361\u7247\u64CD\u4F5C\u4E2D\u624B\u52A8\u52A0\u5165\u9519\u9898\u672C\u3002",
     limitedTitle: "\u5F53\u524D\u4F18\u5148\u961F\u5217\u5DF2\u5B8C\u6210\uFF0C\u8FD8\u53EF\u4EE5\u7EE7\u7EED\u67E5\u770B\u5269\u4F59\u65B0\u5361\u3002",
     noCardsTitle: "\u5F53\u524D\u6CA1\u6709\u53EF\u590D\u4E60\u7684\u5361\u7247\u3002",
     noCardsDescription: "\u4F60\u53EF\u4EE5\u5148\u751F\u6210\u5F53\u524D\u7B14\u8BB0\u6216\u5F53\u524D\u6587\u4EF6\u5939\u7684\u95EA\u5361\u3002"

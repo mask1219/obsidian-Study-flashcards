@@ -49,7 +49,7 @@ export const REVIEW_COPY = {
     cardCount: (count: number) => `${count} 张`
   },
   meta: {
-    shortcutHint: "空格翻面 · ← → 切换 · 1-4 评分",
+    shortcutHint: "空格翻面 · ← → 切换",
     dueCount: "待复习",
     queueCount: "当前队列",
     sourceCount: "当前来源",
@@ -60,16 +60,9 @@ export const REVIEW_COPY = {
     limitedNewCards: (totalNewCards: number, newCardLimit: number) => `当前来源共有 ${totalNewCards} 张新卡，按每日新卡上限仅展示前 ${newCardLimit} 张。`,
     positionLabel: (index: number, total: number) => `${REVIEW_COPY.meta.position} ${index} 张 / 共 ${total} 张`
   },
-  ratings: {
-    again: "重来",
-    hard: "困难",
-    good: "正常",
-    easy: "简单",
-    hint: "翻到答案后可直接评分。"
-  },
   emptyState: {
     mistakesTitle: "错题本目前是空的。",
-    mistakesDescription: "复习时点击“重来”会自动加入错题本。",
+    mistakesDescription: "你可以在卡片操作中手动加入错题本。",
     limitedTitle: "当前优先队列已完成，还可以继续查看剩余新卡。",
     noCardsTitle: "当前没有可复习的卡片。",
     noCardsDescription: "你可以先生成当前笔记或当前文件夹的闪卡。"

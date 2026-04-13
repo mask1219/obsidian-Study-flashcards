@@ -1,7 +1,6 @@
-import { applyScheduledReview } from "./scheduler";
 import { DEFAULT_SETTINGS } from "./settings";
-import { clearMistakeBookState, isMasteredMistakeCard, normalizeCard, setMasteredState, setMistakeBookState, updateMistakeBookState } from "./cardState";
-import type { Flashcard, FlashcardsData, NoteFlashcardsSettings, ReviewRating } from "./types";
+import { clearMistakeBookState, isMasteredMistakeCard, normalizeCard, setMasteredState, setMistakeBookState } from "./cardState";
+import type { Flashcard, FlashcardsData, NoteFlashcardsSettings } from "./types";
 
 const DEFAULT_DATA: FlashcardsData = {
   cards: []
@@ -9,6 +8,17 @@ const DEFAULT_DATA: FlashcardsData = {
 
 interface PersistedData extends FlashcardsData {
   settings?: NoteFlashcardsSettings;
+}
+
+function normalizePrefix(prefix: string): string {
+  return prefix.endsWith("/") ? prefix : `${prefix}/`;
+}
+
+function hasPrefixPath(path: string, prefix: string): boolean {
+  if (prefix.trim() === "") {
+    return true;
+  }
+  return path.startsWith(normalizePrefix(prefix));
 }
 
 export class CardStore {
@@ -49,7 +59,7 @@ export class CardStore {
 
   async getCardsByPrefix(prefix: string): Promise<Flashcard[]> {
     const cards = await this.getCards();
-    return cards.filter((card) => card.sourcePath.startsWith(prefix));
+    return cards.filter((card) => hasPrefixPath(card.sourcePath, prefix));
   }
 
   async setMistakeBook(cardId: string, inMistakeBook: boolean): Promise<Flashcard | null> {
@@ -100,21 +110,5 @@ export class CardStore {
   async resetCards(): Promise<void> {
     const data = await this.getData();
     await this.saveData({ ...data, cards: [] });
-  }
-
-  async applyReview(cardId: string, rating: ReviewRating): Promise<Flashcard | null> {
-    const data = await this.getData();
-    const settings = data.settings ?? DEFAULT_SETTINGS;
-    let reviewedCard: Flashcard | null = null;
-    const updated = data.cards.map((card) => {
-      if (card.id !== cardId) {
-        return card;
-      }
-      reviewedCard = updateMistakeBookState(applyScheduledReview(card, rating, settings), rating);
-      return reviewedCard;
-    });
-
-    await this.saveData({ ...data, cards: updated });
-    return reviewedCard;
   }
 }

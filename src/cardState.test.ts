@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { clearMistakeBookState, isMasteredMistakeCard, normalizeCard, setMasteredState, setMistakeBookState, updateMistakeBookState } from "./cardState";
+import { clearMistakeBookState, isMasteredMistakeCard, normalizeCard, setMasteredState, setMistakeBookState } from "./cardState";
 import type { Flashcard } from "./types";
 
 function createCard(overrides: Partial<Flashcard> = {}): Flashcard {
@@ -82,24 +82,5 @@ describe("cardState", () => {
   it("tracks mastered mistake cards", () => {
     expect(isMasteredMistakeCard(createCard({ inMistakeBook: true, mistakeSuccessStreak: 2 }))).toBe(true);
     expect(isMasteredMistakeCard(createCard({ inMistakeBook: true, mistakeSuccessStreak: 1 }))).toBe(false);
-  });
-
-  it("updates mistake book state from ratings without changing behavior", () => {
-    expect(updateMistakeBookState(createCard(), "again")).toMatchObject({
-      inMistakeBook: true,
-      mistakeSuccessStreak: 0
-    });
-    expect(updateMistakeBookState(createCard({ inMistakeBook: true, mistakeSuccessStreak: 0 }), "good")).toMatchObject({
-      inMistakeBook: true,
-      mistakeSuccessStreak: 1
-    });
-    expect(updateMistakeBookState(createCard({ inMistakeBook: true, mistakeSuccessStreak: 1 }), "easy")).toMatchObject({
-      inMistakeBook: false,
-      mistakeSuccessStreak: 0
-    });
-    expect(updateMistakeBookState(createCard({ inMistakeBook: true, mistakeSuccessStreak: 1 }), "hard")).toMatchObject({
-      inMistakeBook: true,
-      mistakeSuccessStreak: 0
-    });
   });
 });

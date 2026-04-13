@@ -1,4 +1,8 @@
 import { defineConfig } from "vitest/config";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
+
+const rootDir = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   test: {
@@ -6,7 +10,7 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      obsidian: "/Users/am700/Projects/obsidian-flashcards-plugin/src/test/obsidian.ts"
+      obsidian: resolve(rootDir, "src/test/obsidian.ts")
     }
   }
 });

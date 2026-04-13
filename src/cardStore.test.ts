@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { CardStore } from "./cardStore";
 import type { Flashcard, NoteFlashcardsSettings } from "./types";
 
@@ -53,45 +53,6 @@ function createStore(cards: Flashcard[]) {
 }
 
 describe("CardStore mistake book behavior", () => {
-  it("adds card to mistake book on again", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-04-12T08:00:00.000Z"));
-
-    const { store } = createStore([createCard()]);
-    const reviewed = await store.applyReview("card-1", "again");
-
-    expect(reviewed?.inMistakeBook).toBe(true);
-    expect(reviewed?.mistakeSuccessStreak).toBe(0);
-
-    vi.useRealTimers();
-  });
-
-  it("increments streak on good for cards already in mistake book", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-04-12T08:00:00.000Z"));
-
-    const { store } = createStore([createCard({ inMistakeBook: true, mistakeSuccessStreak: 0 })]);
-    const reviewed = await store.applyReview("card-1", "good");
-
-    expect(reviewed?.inMistakeBook).toBe(true);
-    expect(reviewed?.mistakeSuccessStreak).toBe(1);
-
-    vi.useRealTimers();
-  });
-
-  it("auto removes card from mistake book after consecutive successes", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-04-12T08:00:00.000Z"));
-
-    const { store } = createStore([createCard({ inMistakeBook: true, mistakeSuccessStreak: 1 })]);
-    const reviewed = await store.applyReview("card-1", "easy");
-
-    expect(reviewed?.inMistakeBook).toBe(false);
-    expect(reviewed?.mistakeSuccessStreak).toBe(0);
-
-    vi.useRealTimers();
-  });
-
   it("clears mastered mistake cards in bulk", async () => {
     const { store, getPersisted } = createStore([
       createCard({ id: "a", inMistakeBook: true, mistakeSuccessStreak: 2 }),
