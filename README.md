@@ -29,6 +29,7 @@ npm run build
 - `main.js`
 - `manifest.json`
 - `styles.css`
+- `versions.json`
 
 目标目录通常为：
 
@@ -36,7 +37,7 @@ npm run build
 <你的库路径>/.obsidian/plugins/note-flashcards/
 ```
 
-然后在 Obsidian 的社区插件设置中启用 `Note Flashcards`。
+然后在 Obsidian 的社区插件设置中启用 `Study Flashcards`。
 
 ## 使用方法
 
