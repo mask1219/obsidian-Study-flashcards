@@ -1,8 +1,9 @@
 import * as obsidian from "obsidian";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { AI_MODEL_ERRORS } from "./aiModelState";
 import { generateAiFlashcards, testAiConnection } from "./aiGenerator";
 import { GENERATION_COPY } from "./generationStrategy";
-import type { NoteFlashcardsSettings, ParsedSection } from "./types";
+import type { AiModelConfig, NoteFlashcardsSettings, ParsedSection } from "./types";
 
 const SECTIONS: ParsedSection[] = [
   {
@@ -23,16 +24,28 @@ const SECTIONS: ParsedSection[] = [
   }
 ];
 
-function createSettings(overrides: Partial<NoteFlashcardsSettings> = {}): NoteFlashcardsSettings {
+function createModelConfig(overrides: Partial<AiModelConfig> = {}): AiModelConfig {
+  return {
+    id: "model-1",
+    name: "测试模型",
+    provider: "openai-compatible",
+    apiUrl: "https://api.openai.com/v1/chat/completions",
+    apiKey: "test-key",
+    model: "gpt-4o-mini",
+    prompt: "",
+    ...overrides
+  };
+}
+
+function createSettings(overrides: Partial<NoteFlashcardsSettings> = {}, modelOverrides: Partial<AiModelConfig> = {}): NoteFlashcardsSettings {
+  const model = createModelConfig(modelOverrides);
   return {
     generatorMode: "ai",
     maxCardsPerNote: 5,
     summaryLength: 20,
-    aiProvider: "openai-compatible",
-    aiApiUrl: "https://api.openai.com/v1/chat/completions",
-    aiApiKey: "test-key",
-    aiModel: "gpt-4o-mini",
-    aiPrompt: "",
+    aiModelConfigs: [model],
+    activeAiModelId: model.id,
+    aiSectionCollapsed: true,
     ignoredFolders: [],
     newCardsPerDay: 10,
     showAllCardsInReview: false,
@@ -49,7 +62,11 @@ describe("generateAiFlashcards", () => {
   });
 
   it("throws when required AI settings are missing", async () => {
-    await expect(generateAiFlashcards(SECTIONS, createSettings({ aiApiKey: "" }))).rejects.toThrow(GENERATION_COPY.errors.aiNotConfigured);
+    await expect(generateAiFlashcards(SECTIONS, createSettings({}, { apiKey: "" }))).rejects.toThrow("API Key");
+  });
+
+  it("throws when no active model is selected", async () => {
+    await expect(generateAiFlashcards(SECTIONS, createSettings({ activeAiModelId: "" }))).rejects.toThrow(AI_MODEL_ERRORS.noActiveModel);
   });
 
   it("creates AI flashcards from a valid OpenAI-compatible response", async () => {
@@ -138,10 +155,10 @@ describe("generateAiFlashcards", () => {
       }
     });
 
-    const cards = await generateAiFlashcards(SECTIONS, createSettings({
-      aiProvider: "anthropic",
-      aiApiUrl: "https://api.anthropic.com/v1/messages",
-      aiModel: "claude-3-7-sonnet-latest"
+    const cards = await generateAiFlashcards(SECTIONS, createSettings({}, {
+      provider: "anthropic",
+      apiUrl: "https://api.anthropic.com/v1/messages",
+      model: "claude-3-7-sonnet-latest"
     }));
 
     expect(requestUrlMock).toHaveBeenCalledWith(expect.objectContaining({
@@ -175,10 +192,10 @@ describe("generateAiFlashcards", () => {
       }
     });
 
-    const cards = await generateAiFlashcards(SECTIONS, createSettings({
-      aiProvider: "openrouter",
-      aiApiUrl: "https://openrouter.ai/api/v1/chat/completions",
-      aiModel: "openai/gpt-4o-mini"
+    const cards = await generateAiFlashcards(SECTIONS, createSettings({}, {
+      provider: "openrouter",
+      apiUrl: "https://openrouter.ai/api/v1/chat/completions",
+      model: "openai/gpt-4o-mini"
     }));
 
     expect(requestUrlMock).toHaveBeenCalledWith(expect.objectContaining({
@@ -211,10 +228,10 @@ describe("generateAiFlashcards", () => {
       }
     });
 
-    const cards = await generateAiFlashcards(SECTIONS, createSettings({
-      aiProvider: "azure-openai",
-      aiApiUrl: "https://demo.openai.azure.com/openai/deployments/{model}/chat/completions?api-version=2024-06-01",
-      aiModel: "gpt-4o-mini-deploy"
+    const cards = await generateAiFlashcards(SECTIONS, createSettings({}, {
+      provider: "azure-openai",
+      apiUrl: "https://demo.openai.azure.com/openai/deployments/{model}/chat/completions?api-version=2024-06-01",
+      model: "gpt-4o-mini-deploy"
     }));
 
     expect(requestUrlMock).toHaveBeenCalledWith(expect.objectContaining({
@@ -252,10 +269,10 @@ describe("generateAiFlashcards", () => {
       }
     });
 
-    const cards = await generateAiFlashcards(SECTIONS, createSettings({
-      aiProvider: "gemini",
-      aiApiUrl: "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-      aiModel: "gemini-2.5-flash"
+    const cards = await generateAiFlashcards(SECTIONS, createSettings({}, {
+      provider: "gemini",
+      apiUrl: "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+      model: "gemini-2.5-flash"
     }));
 
     expect(requestUrlMock).toHaveBeenCalledWith(expect.objectContaining({
@@ -292,7 +309,7 @@ describe("generateAiFlashcards", () => {
     await expect(generateAiFlashcards(SECTIONS, createSettings())).rejects.toThrow(GENERATION_COPY.errors.aiInvalidResponse);
   });
 
-  it("surfaces API failure details from the provider", async () => {
+  it("surfaces auth failure in Chinese with provider detail", async () => {
     const requestUrlMock = vi.spyOn(obsidian, "requestUrl");
     requestUrlMock.mockResolvedValueOnce({
       status: 401,
@@ -306,13 +323,35 @@ describe("generateAiFlashcards", () => {
       }
     });
 
-    await expect(generateAiFlashcards(SECTIONS, createSettings())).rejects.toThrow("Invalid API key");
+    const error = await generateAiFlashcards(SECTIONS, createSettings()).catch((value) => value);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("鉴权失败");
+    expect((error as Error).message).toContain("Invalid API key");
   });
 
-  it("wraps network exceptions as provider call errors", async () => {
+  it("surfaces rate limit failure in Chinese", async () => {
+    vi.spyOn(obsidian, "requestUrl").mockResolvedValueOnce({
+      status: 429,
+      headers: {},
+      arrayBuffer: new ArrayBuffer(0),
+      text: "",
+      json: {
+        error: {
+          message: "Rate limit exceeded"
+        }
+      }
+    });
+
+    await expect(generateAiFlashcards(SECTIONS, createSettings())).rejects.toThrow("配额不足");
+  });
+
+  it("wraps network exceptions as Chinese network errors", async () => {
     vi.spyOn(obsidian, "requestUrl").mockRejectedValueOnce(new Error("network unreachable"));
 
-    await expect(generateAiFlashcards(SECTIONS, createSettings())).rejects.toThrow("network unreachable");
+    const error = await generateAiFlashcards(SECTIONS, createSettings()).catch((value) => value);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("网络请求失败");
+    expect((error as Error).message).toContain("network unreachable");
   });
 
   it("tests provider connection successfully", async () => {
@@ -332,7 +371,7 @@ describe("generateAiFlashcards", () => {
       }
     });
 
-    await expect(testAiConnection(createSettings())).resolves.toBeUndefined();
+    await expect(testAiConnection(createModelConfig())).resolves.toBeUndefined();
   });
 
   it("fails provider connection when response has no content", async () => {
@@ -346,6 +385,6 @@ describe("generateAiFlashcards", () => {
       }
     });
 
-    await expect(testAiConnection(createSettings())).rejects.toThrow(GENERATION_COPY.errors.aiInvalidResponse);
+    await expect(testAiConnection(createModelConfig())).rejects.toThrow(GENERATION_COPY.errors.aiInvalidResponse);
   });
 });

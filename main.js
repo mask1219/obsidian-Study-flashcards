@@ -30,11 +30,9 @@ var DEFAULT_SETTINGS = {
   generatorMode: "rule",
   maxCardsPerNote: 12,
   summaryLength: 220,
-  aiProvider: "openai-compatible",
-  aiApiUrl: "https://api.openai.com/v1/chat/completions",
-  aiApiKey: "",
-  aiModel: "",
-  aiPrompt: "",
+  aiModelConfigs: [],
+  activeAiModelId: "",
+  aiSectionCollapsed: true,
   ignoredFolders: [],
   newCardsPerDay: 10,
   showAllCardsInReview: false,
@@ -250,6 +248,320 @@ function parseMarkdownSections(markdown, sourcePath) {
 // src/aiGenerator.ts
 var import_obsidian = require("obsidian");
 
+// src/settingsState.ts
+var DEFAULT_AI_API_URLS = {
+  "openai-compatible": "https://api.openai.com/v1/chat/completions",
+  openrouter: "https://openrouter.ai/api/v1/chat/completions",
+  "azure-openai": "https://{resource}.openai.azure.com/openai/deployments/{model}/chat/completions?api-version=2024-06-01",
+  anthropic: "https://api.anthropic.com/v1/messages",
+  gemini: "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+};
+var SETTINGS_COPY = {
+  generatorMode: {
+    name: "\u751F\u6210\u6A21\u5F0F",
+    description: "\u9009\u62E9\u89C4\u5219\u751F\u6210\u3001AI \u751F\u6210\u6216\u6DF7\u5408\u6A21\u5F0F",
+    options: {
+      rule: "\u89C4\u5219",
+      ai: "AI",
+      hybrid: "\u6DF7\u5408"
+    }
+  },
+  maxCardsPerNote: {
+    name: "\u6BCF\u7BC7\u7B14\u8BB0\u6700\u5927\u5361\u7247\u6570",
+    description: "\u9650\u5236\u5355\u7BC7\u7B14\u8BB0\u751F\u6210\u7684\u95EA\u5361\u6570\u91CF",
+    placeholder: "12"
+  },
+  aiModelsSection: {
+    name: "AI \u6A21\u578B\u914D\u7F6E",
+    description: "\u7EF4\u62A4\u591A\u4E2A\u6A21\u578B\u914D\u7F6E\u5E76\u9009\u62E9\u5F53\u524D\u751F\u6548\u6A21\u578B\uFF0C\u751F\u6210\u65F6\u5C06\u76F4\u63A5\u4F7F\u7528\u5F53\u524D\u751F\u6548\u6A21\u578B\u3002",
+    addButton: "\u65B0\u589E\u6A21\u578B\u914D\u7F6E"
+  },
+  activeAiModel: {
+    name: "\u5F53\u524D\u751F\u6548\u6A21\u578B",
+    description: "\u751F\u6210\u95EA\u5361\u65F6\u4F1A\u76F4\u63A5\u4F7F\u7528\u8BE5\u6A21\u578B\uFF0C\u4E0D\u4F1A\u4E8C\u6B21\u8BE2\u95EE",
+    placeholder: "\u8BF7\u9009\u62E9\u6A21\u578B\u914D\u7F6E",
+    none: "\u672A\u9009\u62E9"
+  },
+  aiModelName: {
+    name: "\u914D\u7F6E\u540D\u79F0",
+    placeholder: "\u4F8B\u5982\uFF1AOpenAI-\u4E3B\u914D\u7F6E"
+  },
+  aiProvider: {
+    name: "Provider",
+    description: "\u9009\u62E9\u8981\u8C03\u7528\u7684\u6A21\u578B\u5E73\u53F0",
+    options: {
+      "openai-compatible": "OpenAI \u517C\u5BB9",
+      openrouter: "OpenRouter",
+      "azure-openai": "Azure OpenAI",
+      anthropic: "Anthropic",
+      gemini: "Gemini"
+    }
+  },
+  aiApiUrl: {
+    name: "AI \u63A5\u53E3\u5730\u5740",
+    description: "\u53EF\u81EA\u5B9A\u4E49\u5B8C\u6574\u63A5\u53E3\u5730\u5740\uFF1BGemini \u652F\u6301\u4F7F\u7528 {model} \u5360\u4F4D\u7B26",
+    placeholder: "https://api.openai.com/v1/chat/completions"
+  },
+  aiApiKey: {
+    name: "AI API Key",
+    description: "\u7528\u4E8E\u8C03\u7528 AI \u6A21\u578B\uFF0C\u5F53\u524D\u4F1A\u968F\u63D2\u4EF6\u8BBE\u7F6E\u4FDD\u5B58\u5728\u672C\u5730",
+    placeholder: "sk-..."
+  },
+  aiModel: {
+    name: "AI \u6A21\u578B\u540D",
+    description: "\u586B\u5199\u76EE\u6807\u6A21\u578B\u6807\u8BC6\uFF08Azure \u573A\u666F\u586B\u5199 deployment \u540D\u79F0\uFF09",
+    placeholder: "gpt-4o-mini"
+  },
+  aiPrompt: {
+    name: "AI \u9644\u52A0\u63D0\u793A\u8BCD",
+    description: "\u53EF\u9009\uFF0C\u7528\u4E8E\u8865\u5145\u751F\u6210\u504F\u597D\uFF1B\u63D2\u4EF6\u4ECD\u4F1A\u5F3A\u5236\u8981\u6C42\u8FD4\u56DE JSON",
+    placeholder: "\u4F8B\u5982\uFF1A\u66F4\u504F\u5411\u672F\u8BED\u5B9A\u4E49\u3001\u5BF9\u6BD4\u9898\u548C\u6B65\u9AA4\u9898"
+  },
+  aiConnectionTest: {
+    name: "AI \u8FDE\u63A5\u6D4B\u8BD5",
+    description: "\u4EC5\u4F7F\u7528\u5F53\u524D\u6B63\u5728\u7F16\u8F91\u7684\u6A21\u578B\u914D\u7F6E\u8FDB\u884C\u8FDE\u901A\u6027\u9A8C\u8BC1",
+    button: "\u6D4B\u8BD5\u8FDE\u63A5",
+    success: "AI \u8FDE\u63A5\u6D4B\u8BD5\u6210\u529F",
+    failed: (detail) => `AI \u8FDE\u63A5\u6D4B\u8BD5\u5931\u8D25${detail ? `\uFF1A${detail}` : ""}`
+  },
+  aiModelActions: {
+    edit: "\u7F16\u8F91",
+    copy: "\u590D\u5236",
+    setDefault: "\u8BBE\u4E3A\u9ED8\u8BA4",
+    moveUp: "\u4E0A\u79FB",
+    moveDown: "\u4E0B\u79FB",
+    remove: "\u5220\u9664",
+    save: "\u4FDD\u5B58\u6A21\u578B\u914D\u7F6E",
+    cancel: "\u53D6\u6D88\u7F16\u8F91",
+    defaultTag: "\u5F53\u524D\u751F\u6548"
+  },
+  summaryLength: {
+    name: "\u7B54\u6848\u6458\u8981\u957F\u5EA6",
+    description: "\u63A7\u5236\u7B54\u6848\u6587\u672C\u7684\u6700\u5927\u957F\u5EA6",
+    placeholder: "220"
+  },
+  newCardsPerDay: {
+    name: "\u6BCF\u65E5\u65B0\u5361\u4E0A\u9650",
+    description: "\u9650\u5236\u590D\u4E60\u9875\u5F53\u5929\u9996\u6B21\u5C55\u793A\u7684\u65B0\u5361\u6570\u91CF\uFF0C\u4E0D\u5F71\u54CD\u5B9E\u9645\u751F\u6210\u603B\u6570",
+    placeholder: "10"
+  },
+  learningStepsMinutes: {
+    name: "\u5B66\u4E60\u6B65\u8FDB\uFF08\u5206\u949F\uFF09",
+    description: "\u4F7F\u7528\u9017\u53F7\u5206\u9694\uFF0C\u4F8B\u5982 1,10",
+    placeholder: "1,10"
+  },
+  graduatingIntervalDays: {
+    name: "\u6BD5\u4E1A\u95F4\u9694\uFF08\u5929\uFF09",
+    description: "\u5B8C\u6210\u5B66\u4E60\u6B65\u8FDB\u540E\u7684\u9ED8\u8BA4\u590D\u4E60\u95F4\u9694",
+    placeholder: "1"
+  },
+  easyIntervalDays: {
+    name: "\u7B80\u5355\u95F4\u9694\uFF08\u5929\uFF09",
+    description: "\u70B9\u51FB\u201C\u7B80\u5355\u201D\u540E\u76F4\u63A5\u8FDB\u5165\u590D\u4E60\u7684\u95F4\u9694",
+    placeholder: "4"
+  },
+  showAllCardsInReview: {
+    name: "\u65E0\u5230\u671F\u5361\u65F6\u663E\u793A\u5168\u90E8",
+    description: "\u5F53\u4ECA\u5929\u6CA1\u6709\u5230\u671F\u5361\u65F6\uFF0C\u662F\u5426\u7EE7\u7EED\u6D4F\u89C8\u5168\u90E8\u5361\u7247"
+  },
+  ignoredFolders: {
+    name: "\u5FFD\u7565\u6587\u4EF6\u5939",
+    description: "\u4F7F\u7528\u9017\u53F7\u5206\u9694\u591A\u4E2A\u6587\u4EF6\u5939\u524D\u7F00",
+    placeholder: "Templates/,Archive/"
+  },
+  resetCards: {
+    name: "\u91CD\u7F6E\u6240\u6709\u5361\u7247\u6570\u636E",
+    description: "\u6E05\u7A7A\u5F53\u524D\u63D2\u4EF6\u4FDD\u5B58\u7684\u5168\u90E8\u5361\u7247\u3001\u9519\u9898\u672C\u548C\u5DF2\u638C\u63E1\u72B6\u6001"
+  },
+  resetSettings: {
+    name: "\u6062\u590D\u9ED8\u8BA4\u8BBE\u7F6E",
+    description: "\u5C06\u5F53\u524D\u63D2\u4EF6\u8BBE\u7F6E\u6062\u590D\u4E3A\u9ED8\u8BA4\u503C"
+  }
+};
+function parsePositiveInteger(value) {
+  const parsed = Number(value);
+  return !Number.isNaN(parsed) && parsed > 0 ? parsed : null;
+}
+function parseNonNegativeInteger(value) {
+  const parsed = Number(value);
+  return !Number.isNaN(parsed) && parsed >= 0 ? parsed : null;
+}
+function parsePositiveIntegerList(value) {
+  return value.split(",").map((item) => Number(item.trim())).filter((item) => !Number.isNaN(item) && item > 0);
+}
+function parseStringList(value) {
+  return value.split(",").map((item) => item.trim()).filter(Boolean);
+}
+function getGeneratorModeOptions() {
+  return [
+    { value: "rule", label: SETTINGS_COPY.generatorMode.options.rule },
+    { value: "ai", label: SETTINGS_COPY.generatorMode.options.ai },
+    { value: "hybrid", label: SETTINGS_COPY.generatorMode.options.hybrid }
+  ];
+}
+function getAiProviderOptions() {
+  return [
+    { value: "openai-compatible", label: SETTINGS_COPY.aiProvider.options["openai-compatible"] },
+    { value: "openrouter", label: SETTINGS_COPY.aiProvider.options.openrouter },
+    { value: "azure-openai", label: SETTINGS_COPY.aiProvider.options["azure-openai"] },
+    { value: "anthropic", label: SETTINGS_COPY.aiProvider.options.anthropic },
+    { value: "gemini", label: SETTINGS_COPY.aiProvider.options.gemini }
+  ];
+}
+function getDefaultAiApiUrl(provider) {
+  return DEFAULT_AI_API_URLS[provider];
+}
+async function updateSetting(settings, key, value, saveSettings) {
+  settings[key] = value;
+  await saveSettings();
+}
+
+// src/aiModelState.ts
+var SUPPORTED_PROVIDERS = /* @__PURE__ */ new Set(["openai-compatible", "openrouter", "azure-openai", "anthropic", "gemini"]);
+var REQUIRED_FIELD_LABELS = {
+  name: "\u914D\u7F6E\u540D\u79F0",
+  provider: "Provider",
+  apiUrl: "API URL",
+  apiKey: "API Key",
+  model: "\u6A21\u578B\u540D"
+};
+var AI_MODEL_ERRORS = {
+  noConfigs: "\u672A\u914D\u7F6E\u4EFB\u4F55 AI \u6A21\u578B\uFF0C\u8BF7\u5148\u65B0\u589E\u6A21\u578B\u914D\u7F6E\u3002",
+  noActiveModel: "\u672A\u9009\u62E9\u5F53\u524D\u751F\u6548\u6A21\u578B\uFF0C\u8BF7\u5148\u5728\u8BBE\u7F6E\u9875\u9009\u62E9\u3002",
+  activeModelNotFound: "\u5F53\u524D\u751F\u6548\u6A21\u578B\u4E0D\u5B58\u5728\uFF0C\u8BF7\u91CD\u65B0\u9009\u62E9\u3002",
+  unsupportedProvider: "Provider \u4E0D\u652F\u6301\uFF0C\u8BF7\u68C0\u67E5\u6A21\u578B\u914D\u7F6E\u3002",
+  missingFields: (fields) => `\u6A21\u578B\u914D\u7F6E\u7F3A\u5C11\u5FC5\u586B\u9879\uFF1A${fields.join("\u3001")}`
+};
+function createAiModelId() {
+  return `model-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+function createAiModelConfig(provider = "openai-compatible") {
+  return {
+    id: createAiModelId(),
+    name: "",
+    provider,
+    apiUrl: getDefaultAiApiUrl(provider),
+    apiKey: "",
+    model: "",
+    prompt: ""
+  };
+}
+function isSupportedProvider(value) {
+  return typeof value === "string" && SUPPORTED_PROVIDERS.has(value);
+}
+function sanitizeAiModelConfig(data) {
+  if (!data || typeof data !== "object") {
+    return null;
+  }
+  const candidate = data;
+  if (!isSupportedProvider(candidate.provider)) {
+    return null;
+  }
+  return {
+    id: typeof candidate.id === "string" && candidate.id.trim().length > 0 ? candidate.id : createAiModelId(),
+    name: typeof candidate.name === "string" ? candidate.name.trim() : "",
+    provider: candidate.provider,
+    apiUrl: typeof candidate.apiUrl === "string" ? candidate.apiUrl.trim() : "",
+    apiKey: typeof candidate.apiKey === "string" ? candidate.apiKey.trim() : "",
+    model: typeof candidate.model === "string" ? candidate.model.trim() : "",
+    prompt: typeof candidate.prompt === "string" ? candidate.prompt.trim() : ""
+  };
+}
+function sanitizeAiModelConfigs(data) {
+  if (!Array.isArray(data)) {
+    return [];
+  }
+  return data.flatMap((item) => {
+    const config = sanitizeAiModelConfig(item);
+    return config ? [config] : [];
+  });
+}
+function getMissingRequiredFields(config) {
+  const fields = [];
+  if (!config.name.trim()) {
+    fields.push(REQUIRED_FIELD_LABELS.name);
+  }
+  if (!config.provider || !isSupportedProvider(config.provider)) {
+    fields.push(REQUIRED_FIELD_LABELS.provider);
+  }
+  if (!config.apiUrl.trim()) {
+    fields.push(REQUIRED_FIELD_LABELS.apiUrl);
+  }
+  if (!config.apiKey.trim()) {
+    fields.push(REQUIRED_FIELD_LABELS.apiKey);
+  }
+  if (!config.model.trim()) {
+    fields.push(REQUIRED_FIELD_LABELS.model);
+  }
+  return fields;
+}
+function validateModelConfigForSave(config) {
+  const missing = getMissingRequiredFields(config);
+  return missing.length > 0 ? AI_MODEL_ERRORS.missingFields(missing) : null;
+}
+function validateModelConfigForRequest(config) {
+  const missing = getMissingRequiredFields({ ...config, name: config.name || "tmp" });
+  const requestFields = missing.filter((field) => field !== REQUIRED_FIELD_LABELS.name);
+  if (requestFields.length > 0) {
+    return AI_MODEL_ERRORS.missingFields(requestFields);
+  }
+  if (!isSupportedProvider(config.provider)) {
+    return AI_MODEL_ERRORS.unsupportedProvider;
+  }
+  return null;
+}
+function getActiveAiModel(settings) {
+  if (settings.aiModelConfigs.length === 0 || !settings.activeAiModelId.trim()) {
+    return null;
+  }
+  return settings.aiModelConfigs.find((config) => config.id === settings.activeAiModelId) ?? null;
+}
+function getActiveAiModelOrThrow(settings) {
+  if (settings.aiModelConfigs.length === 0) {
+    throw new Error(AI_MODEL_ERRORS.noConfigs);
+  }
+  if (!settings.activeAiModelId.trim()) {
+    throw new Error(AI_MODEL_ERRORS.noActiveModel);
+  }
+  const active = getActiveAiModel(settings);
+  if (!active) {
+    throw new Error(AI_MODEL_ERRORS.activeModelNotFound);
+  }
+  const validationError = validateModelConfigForRequest(active);
+  if (validationError) {
+    throw new Error(validationError);
+  }
+  return active;
+}
+function buildCopyName(baseName, existingNames) {
+  const normalizedBase = baseName.trim() || "\u672A\u547D\u540D\u914D\u7F6E";
+  const firstCandidate = `${normalizedBase}-\u526F\u672C`;
+  if (!existingNames.includes(firstCandidate)) {
+    return firstCandidate;
+  }
+  let suffix = 2;
+  while (existingNames.includes(`${normalizedBase}-\u526F\u672C${suffix}`)) {
+    suffix += 1;
+  }
+  return `${normalizedBase}-\u526F\u672C${suffix}`;
+}
+function duplicateModelConfig(config, existingNames) {
+  return {
+    ...config,
+    id: createAiModelId(),
+    name: buildCopyName(config.name, existingNames)
+  };
+}
+function moveModelConfig(configs, from, to) {
+  if (from < 0 || from >= configs.length || to < 0 || to >= configs.length || from === to) {
+    return configs;
+  }
+  const next = [...configs];
+  const [item] = next.splice(from, 1);
+  next.splice(to, 0, item);
+  return next;
+}
+
 // src/cardFactory.ts
 function hashText(input) {
   let hash = 2166136261;
@@ -298,9 +610,6 @@ var DEFAULT_SYSTEM_PROMPT = [
   "\u4F60\u53EA\u80FD\u57FA\u4E8E\u7528\u6237\u63D0\u4F9B\u7684\u7B14\u8BB0\u5185\u5BB9\u751F\u6210\u95EA\u5361\uFF0C\u4E0D\u8981\u8865\u5145\u5916\u90E8\u77E5\u8BC6\u3002",
   "\u8F93\u51FA\u5FC5\u987B\u662F\u4E25\u683C JSON\uFF0C\u4E0D\u80FD\u8F93\u51FA Markdown \u4EE3\u7801\u5757\u6216\u989D\u5916\u89E3\u91CA\u3002"
 ].join(" ");
-function isConfigured(settings) {
-  return settings.aiApiUrl.trim().length > 0 && settings.aiApiKey.trim().length > 0 && settings.aiModel.trim().length > 0;
-}
 function resolveProviderApiUrl(apiUrl, model) {
   return apiUrl.includes("{model}") ? apiUrl.replace("{model}", encodeURIComponent(model)) : apiUrl;
 }
@@ -332,11 +641,11 @@ function extractGeminiContent(response) {
   }
   return parts.map((part) => typeof part?.text === "string" ? part.text : "").join("").trim();
 }
-function extractProviderContent(response, settings) {
-  if (settings.aiProvider === "anthropic") {
+function extractProviderContent(response, provider) {
+  if (provider === "anthropic") {
     return extractAnthropicContent(response);
   }
-  if (settings.aiProvider === "gemini") {
+  if (provider === "gemini") {
     return extractGeminiContent(response);
   }
   return extractOpenAiContent(response);
@@ -373,14 +682,14 @@ function parseAiResponse(content) {
     return null;
   }
 }
-function buildUserPrompt(sections, settings) {
+function buildUserPrompt(sections, settings, modelConfig) {
   const payload = sections.map((section, index) => ({
     sectionIndex: index,
     heading: section.heading,
     content: section.content,
     listItems: section.listItems
   }));
-  const extraPrompt = settings.aiPrompt.trim();
+  const extraPrompt = modelConfig.prompt.trim();
   return [
     `\u8BF7\u6839\u636E\u4E0B\u9762\u7684\u7B14\u8BB0\u5206\u6BB5\u751F\u6210\u6700\u591A ${settings.maxCardsPerNote} \u5F20\u4E2D\u6587\u95EE\u7B54\u95EA\u5361\u3002`,
     `\u6BCF\u5F20\u5361\u7247\u7684 answer \u5C3D\u91CF\u63A7\u5236\u5728 ${settings.summaryLength} \u4E2A\u5B57\u7B26\u4EE5\u5185\u3002`,
@@ -409,12 +718,12 @@ function normalizeCards(payload, sections, settings) {
     return [createNewFlashcard(question, answer, section, "ai")];
   });
 }
-function buildProviderRequest(userPrompt, settings) {
-  const model = settings.aiModel.trim();
-  const apiKey = settings.aiApiKey.trim();
-  if (settings.aiProvider === "anthropic") {
+function buildProviderRequest(userPrompt, config) {
+  const model = config.model.trim();
+  const apiKey = config.apiKey.trim();
+  if (config.provider === "anthropic") {
     return {
-      url: settings.aiApiUrl.trim(),
+      url: config.apiUrl.trim(),
       headers: {
         "x-api-key": apiKey,
         "anthropic-version": "2023-06-01"
@@ -433,9 +742,9 @@ function buildProviderRequest(userPrompt, settings) {
       })
     };
   }
-  if (settings.aiProvider === "gemini") {
+  if (config.provider === "gemini") {
     return {
-      url: resolveProviderApiUrl(settings.aiApiUrl.trim(), model),
+      url: resolveProviderApiUrl(config.apiUrl.trim(), model),
       headers: {
         "x-goog-api-key": apiKey
       },
@@ -458,9 +767,9 @@ ${userPrompt}`
       })
     };
   }
-  if (settings.aiProvider === "azure-openai") {
+  if (config.provider === "azure-openai") {
     return {
-      url: resolveProviderApiUrl(settings.aiApiUrl.trim(), model),
+      url: resolveProviderApiUrl(config.apiUrl.trim(), model),
       headers: {
         "api-key": apiKey
       },
@@ -479,9 +788,9 @@ ${userPrompt}`
       })
     };
   }
-  if (settings.aiProvider === "openrouter") {
+  if (config.provider === "openrouter") {
     return {
-      url: settings.aiApiUrl.trim(),
+      url: config.apiUrl.trim(),
       headers: {
         Authorization: `Bearer ${apiKey}`
       },
@@ -502,7 +811,7 @@ ${userPrompt}`
     };
   }
   return {
-    url: settings.aiApiUrl.trim(),
+    url: config.apiUrl.trim(),
     headers: {
       Authorization: `Bearer ${apiKey}`
     },
@@ -533,8 +842,34 @@ function extractErrorDetail(status, json) {
   }
   return `HTTP ${status}`;
 }
-async function requestProviderContent(userPrompt, settings) {
-  const requestConfig = buildProviderRequest(userPrompt, settings);
+function appendRawDetail(base, rawDetail) {
+  return rawDetail.trim().length > 0 ? `${base}\uFF08${rawDetail}\uFF09` : base;
+}
+function toHttpErrorMessage(status, rawDetail) {
+  if (status === 401 || status === 403) {
+    return appendRawDetail("\u9274\u6743\u5931\u8D25\uFF0C\u8BF7\u68C0\u67E5 API Key \u6216\u8D26\u53F7\u6743\u9650", rawDetail);
+  }
+  if (status === 429) {
+    return appendRawDetail("\u8BF7\u6C42\u8FC7\u4E8E\u9891\u7E41\u6216\u914D\u989D\u4E0D\u8DB3\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5", rawDetail);
+  }
+  if (status >= 500) {
+    return appendRawDetail("\u6A21\u578B\u670D\u52A1\u5F02\u5E38\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5", rawDetail);
+  }
+  return appendRawDetail("\u8BF7\u6C42\u5931\u8D25\uFF0C\u8BF7\u68C0\u67E5\u6A21\u578B\u914D\u7F6E\u6216\u63A5\u53E3\u72B6\u6001", rawDetail || `HTTP ${status}`);
+}
+function toNetworkErrorMessage(error) {
+  const rawMessage = error instanceof Error ? error.message : "";
+  const normalized = rawMessage.toLowerCase();
+  if (normalized.includes("timeout")) {
+    return appendRawDetail("\u7F51\u7EDC\u8D85\u65F6\uFF0C\u8BF7\u68C0\u67E5\u7F51\u7EDC\u6216\u7A0D\u540E\u91CD\u8BD5", rawMessage);
+  }
+  if (normalized.includes("network") || normalized.includes("unreachable") || normalized.includes("enotfound")) {
+    return appendRawDetail("\u7F51\u7EDC\u8BF7\u6C42\u5931\u8D25\uFF0C\u8BF7\u68C0\u67E5\u7F51\u7EDC\u8FDE\u63A5\u548C API URL", rawMessage);
+  }
+  return appendRawDetail("\u7F51\u7EDC\u8BF7\u6C42\u5931\u8D25\uFF0C\u8BF7\u68C0\u67E5\u7F51\u7EDC\u8FDE\u63A5\u548C API URL", rawMessage);
+}
+async function requestProviderContent(userPrompt, config) {
+  const requestConfig = buildProviderRequest(userPrompt, config);
   let response;
   try {
     response = await (0, import_obsidian.requestUrl)({
@@ -546,34 +881,33 @@ async function requestProviderContent(userPrompt, settings) {
       throw: false
     });
   } catch (error) {
-    const detail = error instanceof Error ? error.message : void 0;
-    throw new Error(GENERATION_COPY.errors.aiRequestFailed(detail));
+    throw new Error(GENERATION_COPY.errors.aiRequestFailed(toNetworkErrorMessage(error)));
   }
   if (response.status >= 400) {
-    throw new Error(GENERATION_COPY.errors.aiRequestFailed(extractErrorDetail(response.status, response.json)));
+    const rawDetail = extractErrorDetail(response.status, response.json);
+    throw new Error(GENERATION_COPY.errors.aiRequestFailed(toHttpErrorMessage(response.status, rawDetail)));
   }
-  return extractProviderContent(response.json, settings);
+  return extractProviderContent(response.json, config.provider);
 }
 async function generateAiFlashcards(sections, settings) {
-  if (!isConfigured(settings)) {
-    throw new Error(GENERATION_COPY.errors.aiNotConfigured);
-  }
+  const modelConfig = getActiveAiModelOrThrow(settings);
   if (sections.length === 0) {
     return [];
   }
-  const content = await requestProviderContent(buildUserPrompt(sections, settings), settings);
+  const content = await requestProviderContent(buildUserPrompt(sections, settings, modelConfig), modelConfig);
   const cards = normalizeCards(parseAiResponse(content), sections, settings);
   if (cards.length === 0) {
     throw new Error(GENERATION_COPY.errors.aiInvalidResponse);
   }
   return cards;
 }
-async function testAiConnection(settings) {
-  if (!isConfigured(settings)) {
-    throw new Error(GENERATION_COPY.errors.aiNotConfigured);
+async function testAiConnection(modelConfig) {
+  const validationError = validateModelConfigForRequest(modelConfig);
+  if (validationError) {
+    throw new Error(validationError);
   }
   const probePrompt = "\u8BF7\u56DE\u590D\u4EFB\u610F\u7B80\u77ED\u6587\u672C\u3002";
-  const content = await requestProviderContent(probePrompt, settings);
+  const content = await requestProviderContent(probePrompt, modelConfig);
   if (!content.trim()) {
     throw new Error(GENERATION_COPY.errors.aiInvalidResponse);
   }
@@ -619,7 +953,6 @@ var GENERATION_COPY = {
     generatedFolder: (count) => `\u6279\u91CF\u751F\u6210\u5B8C\u6210\uFF0C\u5171\u751F\u6210 ${count} \u5F20\u95EA\u5361`
   },
   errors: {
-    aiNotConfigured: "AI \u751F\u6210\u5C1A\u672A\u914D\u7F6E\uFF0C\u8BF7\u5148\u586B\u5199 AI \u63A5\u53E3\u5730\u5740\u3001API Key \u548C\u6A21\u578B\u540D\u3002",
     aiRequestFailed: (detail) => `AI \u63A5\u53E3\u8C03\u7528\u5931\u8D25${detail ? `\uFF1A${detail}` : ""}`,
     aiInvalidResponse: "AI \u8FD4\u56DE\u5185\u5BB9\u65E0\u6CD5\u89E3\u6790\u4E3A\u95EA\u5361\uFF0C\u8BF7\u786E\u8BA4\u6240\u9009 Provider \u914D\u7F6E\u6B63\u786E\u5E76\u8FD4\u56DE\u6709\u6548 JSON\u3002"
   }
@@ -629,11 +962,7 @@ async function generateCardsForSections(sections, settings) {
     return generateAiFlashcards(sections, settings);
   }
   if (settings.generatorMode === "hybrid") {
-    try {
-      return await generateAiFlashcards(sections, settings);
-    } catch (_error) {
-      return generateRuleFlashcards(sections, settings.summaryLength, settings.maxCardsPerNote);
-    }
+    return generateAiFlashcards(sections, settings);
   }
   return generateRuleFlashcards(sections, settings.summaryLength, settings.maxCardsPerNote);
 }
@@ -784,158 +1113,21 @@ var GenerationService = class {
 
 // src/settingTab.ts
 var import_obsidian3 = require("obsidian");
-
-// src/settingsState.ts
-var DEFAULT_AI_API_URLS = {
-  "openai-compatible": "https://api.openai.com/v1/chat/completions",
-  openrouter: "https://openrouter.ai/api/v1/chat/completions",
-  "azure-openai": "https://{resource}.openai.azure.com/openai/deployments/{model}/chat/completions?api-version=2024-06-01",
-  anthropic: "https://api.anthropic.com/v1/messages",
-  gemini: "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-};
-var SETTINGS_COPY = {
-  generatorMode: {
-    name: "\u751F\u6210\u6A21\u5F0F",
-    description: "\u9009\u62E9\u89C4\u5219\u751F\u6210\u3001AI \u751F\u6210\u6216\u6DF7\u5408\u6A21\u5F0F",
-    options: {
-      rule: "\u89C4\u5219",
-      ai: "AI",
-      hybrid: "\u6DF7\u5408"
-    }
-  },
-  maxCardsPerNote: {
-    name: "\u6BCF\u7BC7\u7B14\u8BB0\u6700\u5927\u5361\u7247\u6570",
-    description: "\u9650\u5236\u5355\u7BC7\u7B14\u8BB0\u751F\u6210\u7684\u95EA\u5361\u6570\u91CF",
-    placeholder: "12"
-  },
-  aiProvider: {
-    name: "AI Provider",
-    description: "\u9009\u62E9\u8981\u8C03\u7528\u7684\u6A21\u578B\u5E73\u53F0",
-    options: {
-      "openai-compatible": "OpenAI \u517C\u5BB9",
-      openrouter: "OpenRouter",
-      "azure-openai": "Azure OpenAI",
-      anthropic: "Anthropic",
-      gemini: "Gemini"
-    }
-  },
-  aiApiUrl: {
-    name: "AI \u63A5\u53E3\u5730\u5740",
-    description: "\u53EF\u81EA\u5B9A\u4E49\u5B8C\u6574\u63A5\u53E3\u5730\u5740\uFF1BGemini \u652F\u6301\u4F7F\u7528 {model} \u5360\u4F4D\u7B26",
-    placeholder: "https://api.openai.com/v1/chat/completions"
-  },
-  aiApiKey: {
-    name: "AI API Key",
-    description: "\u7528\u4E8E\u8C03\u7528 AI \u6A21\u578B\uFF0C\u5F53\u524D\u4F1A\u968F\u63D2\u4EF6\u8BBE\u7F6E\u4FDD\u5B58\u5728\u672C\u5730",
-    placeholder: "sk-..."
-  },
-  aiModel: {
-    name: "AI \u6A21\u578B\u540D",
-    description: "\u586B\u5199\u76EE\u6807\u6A21\u578B\u6807\u8BC6\uFF08Azure \u573A\u666F\u586B\u5199 deployment \u540D\u79F0\uFF09",
-    placeholder: "gpt-4o-mini"
-  },
-  aiPrompt: {
-    name: "AI \u9644\u52A0\u63D0\u793A\u8BCD",
-    description: "\u53EF\u9009\uFF0C\u7528\u4E8E\u8865\u5145\u751F\u6210\u504F\u597D\uFF1B\u63D2\u4EF6\u4ECD\u4F1A\u5F3A\u5236\u8981\u6C42\u8FD4\u56DE JSON",
-    placeholder: "\u4F8B\u5982\uFF1A\u66F4\u504F\u5411\u672F\u8BED\u5B9A\u4E49\u3001\u5BF9\u6BD4\u9898\u548C\u6B65\u9AA4\u9898"
-  },
-  aiConnectionTest: {
-    name: "AI \u8FDE\u63A5\u6D4B\u8BD5",
-    description: "\u4F7F\u7528\u5F53\u524D Provider\u3001\u63A5\u53E3\u5730\u5740\u3001API Key \u548C\u6A21\u578B\u540D\u8FDB\u884C\u4E00\u6B21\u8FDE\u901A\u6027\u9A8C\u8BC1",
-    button: "\u6D4B\u8BD5\u8FDE\u63A5",
-    success: "AI \u8FDE\u63A5\u6D4B\u8BD5\u6210\u529F",
-    failed: (detail) => `AI \u8FDE\u63A5\u6D4B\u8BD5\u5931\u8D25${detail ? `\uFF1A${detail}` : ""}`
-  },
-  summaryLength: {
-    name: "\u7B54\u6848\u6458\u8981\u957F\u5EA6",
-    description: "\u63A7\u5236\u7B54\u6848\u6587\u672C\u7684\u6700\u5927\u957F\u5EA6",
-    placeholder: "220"
-  },
-  newCardsPerDay: {
-    name: "\u6BCF\u65E5\u65B0\u5361\u4E0A\u9650",
-    description: "\u9650\u5236\u590D\u4E60\u9875\u5F53\u5929\u9996\u6B21\u5C55\u793A\u7684\u65B0\u5361\u6570\u91CF\uFF0C\u4E0D\u5F71\u54CD\u5B9E\u9645\u751F\u6210\u603B\u6570",
-    placeholder: "10"
-  },
-  learningStepsMinutes: {
-    name: "\u5B66\u4E60\u6B65\u8FDB\uFF08\u5206\u949F\uFF09",
-    description: "\u4F7F\u7528\u9017\u53F7\u5206\u9694\uFF0C\u4F8B\u5982 1,10",
-    placeholder: "1,10"
-  },
-  graduatingIntervalDays: {
-    name: "\u6BD5\u4E1A\u95F4\u9694\uFF08\u5929\uFF09",
-    description: "\u5B8C\u6210\u5B66\u4E60\u6B65\u8FDB\u540E\u7684\u9ED8\u8BA4\u590D\u4E60\u95F4\u9694",
-    placeholder: "1"
-  },
-  easyIntervalDays: {
-    name: "\u7B80\u5355\u95F4\u9694\uFF08\u5929\uFF09",
-    description: "\u70B9\u51FB\u201C\u7B80\u5355\u201D\u540E\u76F4\u63A5\u8FDB\u5165\u590D\u4E60\u7684\u95F4\u9694",
-    placeholder: "4"
-  },
-  showAllCardsInReview: {
-    name: "\u65E0\u5230\u671F\u5361\u65F6\u663E\u793A\u5168\u90E8",
-    description: "\u5F53\u4ECA\u5929\u6CA1\u6709\u5230\u671F\u5361\u65F6\uFF0C\u662F\u5426\u7EE7\u7EED\u6D4F\u89C8\u5168\u90E8\u5361\u7247"
-  },
-  ignoredFolders: {
-    name: "\u5FFD\u7565\u6587\u4EF6\u5939",
-    description: "\u4F7F\u7528\u9017\u53F7\u5206\u9694\u591A\u4E2A\u6587\u4EF6\u5939\u524D\u7F00",
-    placeholder: "Templates/,Archive/"
-  },
-  resetCards: {
-    name: "\u91CD\u7F6E\u6240\u6709\u5361\u7247\u6570\u636E",
-    description: "\u6E05\u7A7A\u5F53\u524D\u63D2\u4EF6\u4FDD\u5B58\u7684\u5168\u90E8\u5361\u7247\u3001\u9519\u9898\u672C\u548C\u5DF2\u638C\u63E1\u72B6\u6001"
-  },
-  resetSettings: {
-    name: "\u6062\u590D\u9ED8\u8BA4\u8BBE\u7F6E",
-    description: "\u5C06\u5F53\u524D\u63D2\u4EF6\u8BBE\u7F6E\u6062\u590D\u4E3A\u9ED8\u8BA4\u503C"
-  }
-};
-function parsePositiveInteger(value) {
-  const parsed = Number(value);
-  return !Number.isNaN(parsed) && parsed > 0 ? parsed : null;
+function getProviderLabel(provider) {
+  const option = getAiProviderOptions().find((item) => item.value === provider);
+  return option?.label ?? provider;
 }
-function parseNonNegativeInteger(value) {
-  const parsed = Number(value);
-  return !Number.isNaN(parsed) && parsed >= 0 ? parsed : null;
-}
-function parsePositiveIntegerList(value) {
-  return value.split(",").map((item) => Number(item.trim())).filter((item) => !Number.isNaN(item) && item > 0);
-}
-function parseStringList(value) {
-  return value.split(",").map((item) => item.trim()).filter(Boolean);
-}
-function getGeneratorModeOptions() {
-  return [
-    { value: "rule", label: SETTINGS_COPY.generatorMode.options.rule },
-    { value: "ai", label: SETTINGS_COPY.generatorMode.options.ai },
-    { value: "hybrid", label: SETTINGS_COPY.generatorMode.options.hybrid }
-  ];
-}
-function getAiProviderOptions() {
-  return [
-    { value: "openai-compatible", label: SETTINGS_COPY.aiProvider.options["openai-compatible"] },
-    { value: "openrouter", label: SETTINGS_COPY.aiProvider.options.openrouter },
-    { value: "azure-openai", label: SETTINGS_COPY.aiProvider.options["azure-openai"] },
-    { value: "anthropic", label: SETTINGS_COPY.aiProvider.options.anthropic },
-    { value: "gemini", label: SETTINGS_COPY.aiProvider.options.gemini }
-  ];
-}
-function getDefaultAiApiUrl(provider) {
-  return DEFAULT_AI_API_URLS[provider];
-}
-async function updateSetting(settings, key, value, saveSettings) {
-  settings[key] = value;
-  await saveSettings();
-}
-
-// src/settingTab.ts
 var NoteFlashcardsSettingTab = class extends import_obsidian3.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.plugin = plugin;
+    this.draftModel = null;
+    this.editingModelId = null;
   }
   display() {
     const { containerEl } = this;
     containerEl.empty();
+    this.ensureDraftIsValid();
     new import_obsidian3.Setting(containerEl).setName(SETTINGS_COPY.generatorMode.name).setDesc(SETTINGS_COPY.generatorMode.description).addDropdown((dropdown) => {
       for (const option of getGeneratorModeOptions()) {
         dropdown.addOption(option.value, option.label);
@@ -950,45 +1142,7 @@ var NoteFlashcardsSettingTab = class extends import_obsidian3.PluginSettingTab {
         await updateSetting(this.plugin.settings, "maxCardsPerNote", parsed, async () => this.plugin.saveSettings());
       }
     }));
-    new import_obsidian3.Setting(containerEl).setName(SETTINGS_COPY.aiProvider.name).setDesc(SETTINGS_COPY.aiProvider.description).addDropdown((dropdown) => {
-      for (const option of getAiProviderOptions()) {
-        dropdown.addOption(option.value, option.label);
-      }
-      dropdown.setValue(this.plugin.settings.aiProvider).onChange(async (value) => {
-        const nextProvider = value;
-        const currentProvider = this.plugin.settings.aiProvider;
-        const currentApiUrl = this.plugin.settings.aiApiUrl.trim();
-        const currentDefaultApiUrl = getDefaultAiApiUrl(currentProvider);
-        const shouldUpdateApiUrl = currentApiUrl.length === 0 || currentApiUrl === currentDefaultApiUrl;
-        this.plugin.settings.aiProvider = nextProvider;
-        if (shouldUpdateApiUrl) {
-          this.plugin.settings.aiApiUrl = getDefaultAiApiUrl(nextProvider);
-        }
-        await this.plugin.saveSettings();
-        this.display();
-      });
-    });
-    new import_obsidian3.Setting(containerEl).setName(SETTINGS_COPY.aiApiUrl.name).setDesc(SETTINGS_COPY.aiApiUrl.description).addText((text) => text.setPlaceholder(getDefaultAiApiUrl(this.plugin.settings.aiProvider)).setValue(this.plugin.settings.aiApiUrl).onChange(async (value) => {
-      await updateSetting(this.plugin.settings, "aiApiUrl", value.trim(), async () => this.plugin.saveSettings());
-    }));
-    new import_obsidian3.Setting(containerEl).setName(SETTINGS_COPY.aiApiKey.name).setDesc(SETTINGS_COPY.aiApiKey.description).addText((text) => text.setPlaceholder(SETTINGS_COPY.aiApiKey.placeholder).setValue(this.plugin.settings.aiApiKey).onChange(async (value) => {
-      await updateSetting(this.plugin.settings, "aiApiKey", value.trim(), async () => this.plugin.saveSettings());
-    }));
-    new import_obsidian3.Setting(containerEl).setName(SETTINGS_COPY.aiModel.name).setDesc(SETTINGS_COPY.aiModel.description).addText((text) => text.setPlaceholder(SETTINGS_COPY.aiModel.placeholder).setValue(this.plugin.settings.aiModel).onChange(async (value) => {
-      await updateSetting(this.plugin.settings, "aiModel", value.trim(), async () => this.plugin.saveSettings());
-    }));
-    new import_obsidian3.Setting(containerEl).setName(SETTINGS_COPY.aiPrompt.name).setDesc(SETTINGS_COPY.aiPrompt.description).addTextArea((text) => text.setPlaceholder(SETTINGS_COPY.aiPrompt.placeholder).setValue(this.plugin.settings.aiPrompt).onChange(async (value) => {
-      await updateSetting(this.plugin.settings, "aiPrompt", value.trim(), async () => this.plugin.saveSettings());
-    }));
-    new import_obsidian3.Setting(containerEl).setName(SETTINGS_COPY.aiConnectionTest.name).setDesc(SETTINGS_COPY.aiConnectionTest.description).addButton((button) => button.setButtonText(SETTINGS_COPY.aiConnectionTest.button).onClick(async () => {
-      try {
-        await testAiConnection(this.plugin.settings);
-        new import_obsidian3.Notice(SETTINGS_COPY.aiConnectionTest.success);
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : void 0;
-        new import_obsidian3.Notice(SETTINGS_COPY.aiConnectionTest.failed(detail));
-      }
-    }));
+    this.renderAiModelsSection(containerEl);
     new import_obsidian3.Setting(containerEl).setName(SETTINGS_COPY.summaryLength.name).setDesc(SETTINGS_COPY.summaryLength.description).addText((text) => text.setPlaceholder(SETTINGS_COPY.summaryLength.placeholder).setValue(String(this.plugin.settings.summaryLength)).onChange(async (value) => {
       const parsed = parsePositiveInteger(value);
       if (parsed !== null) {
@@ -1030,8 +1184,235 @@ var NoteFlashcardsSettingTab = class extends import_obsidian3.PluginSettingTab {
     }));
     new import_obsidian3.Setting(containerEl).setName(SETTINGS_COPY.resetSettings.name).setDesc(SETTINGS_COPY.resetSettings.description).addButton((button) => button.setButtonText(SETTINGS_COPY.resetSettings.name).onClick(async () => {
       await this.plugin.resetSettingsToDefault();
+      this.clearDraft();
       this.display();
     }));
+  }
+  renderAiModelsSection(containerEl) {
+    const detailsEl = containerEl.createEl("details", { cls: "note-flashcards-ai-section" });
+    detailsEl.open = !this.plugin.settings.aiSectionCollapsed;
+    detailsEl.addEventListener("toggle", () => {
+      void this.handleAiSectionToggle(detailsEl.open);
+    });
+    detailsEl.createEl("summary", {
+      cls: "note-flashcards-ai-summary",
+      text: SETTINGS_COPY.aiModelsSection.name
+    });
+    const bodyEl = detailsEl.createDiv({ cls: "note-flashcards-ai-body" });
+    bodyEl.createEl("p", {
+      cls: "note-flashcards-ai-description",
+      text: SETTINGS_COPY.aiModelsSection.description
+    });
+    new import_obsidian3.Setting(bodyEl).setName(SETTINGS_COPY.activeAiModel.name).setDesc(SETTINGS_COPY.activeAiModel.description).addDropdown((dropdown) => {
+      dropdown.addOption("", SETTINGS_COPY.activeAiModel.placeholder);
+      for (const config of this.plugin.settings.aiModelConfigs) {
+        dropdown.addOption(config.id, config.name || "\u672A\u547D\u540D\u914D\u7F6E");
+      }
+      dropdown.setValue(this.plugin.settings.activeAiModelId).onChange(async (value) => {
+        this.plugin.settings.activeAiModelId = value;
+        await this.plugin.saveSettings();
+        this.display();
+      });
+    });
+    new import_obsidian3.Setting(bodyEl).setName(SETTINGS_COPY.aiModelsSection.addButton).addButton((button) => button.setButtonText(SETTINGS_COPY.aiModelsSection.addButton).onClick(() => {
+      this.editingModelId = null;
+      this.draftModel = createAiModelConfig();
+      this.display();
+    }));
+    this.renderModelRows(bodyEl);
+    this.renderModelEditor(bodyEl);
+  }
+  renderModelRows(containerEl) {
+    const listEl = containerEl.createDiv({ cls: "note-flashcards-ai-list" });
+    if (this.plugin.settings.aiModelConfigs.length === 0) {
+      listEl.createEl("p", {
+        cls: "note-flashcards-ai-empty",
+        text: AI_MODEL_ERRORS.noConfigs
+      });
+      return;
+    }
+    for (const [index, config] of this.plugin.settings.aiModelConfigs.entries()) {
+      const setting = new import_obsidian3.Setting(listEl).setName(config.name || "\u672A\u547D\u540D\u914D\u7F6E").setDesc(`${getProviderLabel(config.provider)} \xB7 ${config.model || "\u672A\u586B\u5199\u6A21\u578B\u540D"}`);
+      setting.settingEl.addClass("note-flashcards-ai-model-row");
+      if (this.plugin.settings.activeAiModelId === config.id) {
+        setting.nameEl.createSpan({ cls: "note-flashcards-ai-default-tag", text: SETTINGS_COPY.aiModelActions.defaultTag });
+      }
+      setting.addButton((button) => button.setButtonText(SETTINGS_COPY.aiModelActions.edit).onClick(() => {
+        this.editingModelId = config.id;
+        this.draftModel = { ...config };
+        this.display();
+      }));
+      setting.addButton((button) => button.setButtonText(SETTINGS_COPY.aiModelActions.copy).onClick(async () => {
+        const next = duplicateModelConfig(config, this.plugin.settings.aiModelConfigs.map((item) => item.name));
+        this.plugin.settings.aiModelConfigs = [...this.plugin.settings.aiModelConfigs, next];
+        await this.plugin.saveSettings();
+        this.display();
+      }));
+      setting.addButton((button) => button.setButtonText(SETTINGS_COPY.aiModelActions.setDefault).onClick(async () => {
+        this.plugin.settings.activeAiModelId = config.id;
+        await this.plugin.saveSettings();
+        this.display();
+      }));
+      setting.addButton((button) => button.setButtonText(SETTINGS_COPY.aiModelActions.moveUp).setDisabled(index === 0).onClick(async () => {
+        this.plugin.settings.aiModelConfigs = moveModelConfig(this.plugin.settings.aiModelConfigs, index, index - 1);
+        await this.plugin.saveSettings();
+        this.display();
+      }));
+      setting.addButton((button) => button.setButtonText(SETTINGS_COPY.aiModelActions.moveDown).setDisabled(index === this.plugin.settings.aiModelConfigs.length - 1).onClick(async () => {
+        this.plugin.settings.aiModelConfigs = moveModelConfig(this.plugin.settings.aiModelConfigs, index, index + 1);
+        await this.plugin.saveSettings();
+        this.display();
+      }));
+      setting.addButton((button) => button.setButtonText(SETTINGS_COPY.aiModelActions.remove).setWarning().onClick(async () => {
+        const wasActive = this.plugin.settings.activeAiModelId === config.id;
+        this.plugin.settings.aiModelConfigs = this.plugin.settings.aiModelConfigs.filter((item) => item.id !== config.id);
+        if (wasActive) {
+          this.plugin.settings.activeAiModelId = "";
+          if (this.plugin.settings.aiModelConfigs.length > 0) {
+            new import_obsidian3.Notice("\u5DF2\u5220\u9664\u5F53\u524D\u751F\u6548\u6A21\u578B\uFF0C\u8BF7\u91CD\u65B0\u9009\u62E9\u5F53\u524D\u751F\u6548\u6A21\u578B\u3002");
+          } else {
+            new import_obsidian3.Notice("\u6A21\u578B\u914D\u7F6E\u5DF2\u6E05\u7A7A\uFF0CAI \u4E0E\u6DF7\u5408\u6A21\u5F0F\u5F53\u524D\u4E0D\u53EF\u7528\u3002");
+          }
+        }
+        if (this.editingModelId === config.id) {
+          this.clearDraft();
+        }
+        await this.plugin.saveSettings();
+        this.display();
+      }));
+    }
+  }
+  renderModelEditor(containerEl) {
+    if (!this.draftModel) {
+      return;
+    }
+    const draftModel = this.draftModel;
+    const editorEl = containerEl.createDiv({ cls: "note-flashcards-ai-editor" });
+    new import_obsidian3.Setting(editorEl).setName("\u6A21\u578B\u914D\u7F6E\u7F16\u8F91").setHeading();
+    new import_obsidian3.Setting(editorEl).setName(SETTINGS_COPY.aiModelName.name).addText((text) => text.setPlaceholder(SETTINGS_COPY.aiModelName.placeholder).setValue(draftModel.name).onChange((value) => {
+      if (this.draftModel) {
+        this.draftModel.name = value;
+      }
+    }));
+    new import_obsidian3.Setting(editorEl).setName(SETTINGS_COPY.aiProvider.name).setDesc(SETTINGS_COPY.aiProvider.description).addDropdown((dropdown) => {
+      for (const option of getAiProviderOptions()) {
+        dropdown.addOption(option.value, option.label);
+      }
+      dropdown.setValue(draftModel.provider).onChange((value) => {
+        if (!this.draftModel) {
+          return;
+        }
+        const nextProvider = value;
+        const currentProvider = this.draftModel.provider;
+        const currentApiUrl = this.draftModel.apiUrl.trim();
+        const currentDefaultApiUrl = getDefaultAiApiUrl(currentProvider);
+        const shouldUpdateApiUrl = currentApiUrl.length === 0 || currentApiUrl === currentDefaultApiUrl;
+        this.draftModel.provider = nextProvider;
+        if (shouldUpdateApiUrl) {
+          this.draftModel.apiUrl = getDefaultAiApiUrl(nextProvider);
+        }
+        this.display();
+      });
+    });
+    new import_obsidian3.Setting(editorEl).setName(SETTINGS_COPY.aiApiUrl.name).setDesc(SETTINGS_COPY.aiApiUrl.description).addText((text) => text.setPlaceholder(getDefaultAiApiUrl(draftModel.provider)).setValue(draftModel.apiUrl).onChange((value) => {
+      if (this.draftModel) {
+        this.draftModel.apiUrl = value;
+      }
+    }));
+    new import_obsidian3.Setting(editorEl).setName(SETTINGS_COPY.aiApiKey.name).setDesc(SETTINGS_COPY.aiApiKey.description).addText((text) => text.setPlaceholder(SETTINGS_COPY.aiApiKey.placeholder).setValue(draftModel.apiKey).onChange((value) => {
+      if (this.draftModel) {
+        this.draftModel.apiKey = value;
+      }
+    }));
+    new import_obsidian3.Setting(editorEl).setName(SETTINGS_COPY.aiModel.name).setDesc(SETTINGS_COPY.aiModel.description).addText((text) => text.setPlaceholder(SETTINGS_COPY.aiModel.placeholder).setValue(draftModel.model).onChange((value) => {
+      if (this.draftModel) {
+        this.draftModel.model = value;
+      }
+    }));
+    new import_obsidian3.Setting(editorEl).setName(SETTINGS_COPY.aiPrompt.name).setDesc(SETTINGS_COPY.aiPrompt.description).addTextArea((text) => text.setPlaceholder(SETTINGS_COPY.aiPrompt.placeholder).setValue(draftModel.prompt).onChange((value) => {
+      if (this.draftModel) {
+        this.draftModel.prompt = value;
+      }
+    }));
+    new import_obsidian3.Setting(editorEl).setName(SETTINGS_COPY.aiModelActions.save).addButton((button) => button.setButtonText(SETTINGS_COPY.aiModelActions.save).setCta().onClick(async () => {
+      const draft = this.getNormalizedDraftModel();
+      if (!draft) {
+        return;
+      }
+      const validationError = validateModelConfigForSave(draft);
+      if (validationError) {
+        new import_obsidian3.Notice(validationError);
+        return;
+      }
+      const existingIndex = this.plugin.settings.aiModelConfigs.findIndex((item) => item.id === draft.id);
+      if (existingIndex === -1) {
+        this.plugin.settings.aiModelConfigs = [...this.plugin.settings.aiModelConfigs, draft];
+      } else {
+        const next = [...this.plugin.settings.aiModelConfigs];
+        next[existingIndex] = draft;
+        this.plugin.settings.aiModelConfigs = next;
+      }
+      await this.plugin.saveSettings();
+      this.clearDraft();
+      this.display();
+    })).addButton((button) => button.setButtonText(SETTINGS_COPY.aiConnectionTest.button).onClick(async () => {
+      const draft = this.getNormalizedDraftModel();
+      if (!draft) {
+        return;
+      }
+      const validationError = validateModelConfigForRequest(draft);
+      if (validationError) {
+        new import_obsidian3.Notice(validationError);
+        return;
+      }
+      try {
+        await testAiConnection(draft);
+        new import_obsidian3.Notice(SETTINGS_COPY.aiConnectionTest.success);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : void 0;
+        new import_obsidian3.Notice(SETTINGS_COPY.aiConnectionTest.failed(detail));
+      }
+    })).addButton((button) => button.setButtonText(SETTINGS_COPY.aiModelActions.cancel).onClick(() => {
+      this.clearDraft();
+      this.display();
+    }));
+  }
+  getNormalizedDraftModel() {
+    if (!this.draftModel) {
+      return null;
+    }
+    return {
+      ...this.draftModel,
+      name: this.draftModel.name.trim(),
+      apiUrl: this.draftModel.apiUrl.trim(),
+      apiKey: this.draftModel.apiKey.trim(),
+      model: this.draftModel.model.trim(),
+      prompt: this.draftModel.prompt.trim()
+    };
+  }
+  ensureDraftIsValid() {
+    if (!this.draftModel) {
+      return;
+    }
+    if (!this.editingModelId) {
+      return;
+    }
+    const exists = this.plugin.settings.aiModelConfigs.some((item) => item.id === this.editingModelId);
+    if (!exists) {
+      this.clearDraft();
+    }
+  }
+  clearDraft() {
+    this.draftModel = null;
+    this.editingModelId = null;
+  }
+  async handleAiSectionToggle(isOpen) {
+    const nextCollapsed = !isOpen;
+    if (nextCollapsed === this.plugin.settings.aiSectionCollapsed) {
+      return;
+    }
+    this.plugin.settings.aiSectionCollapsed = nextCollapsed;
+    await this.plugin.saveSettings();
   }
 };
 
@@ -1661,9 +2042,22 @@ async function activateReviewLeaf(existingLeaf, getRightLeaf, revealLeaf, notify
 
 // src/pluginSettingsState.ts
 function loadPersistedSettings(data) {
+  const rawSettings = (data && typeof data === "object" ? data.settings : void 0) ?? {};
+  const aiModelConfigs = sanitizeAiModelConfigs(rawSettings.aiModelConfigs);
+  const activeAiModelId = typeof rawSettings.activeAiModelId === "string" ? rawSettings.activeAiModelId : "";
   return {
-    ...DEFAULT_SETTINGS,
-    ...(data && typeof data === "object" ? data.settings : void 0) ?? {}
+    generatorMode: rawSettings.generatorMode ?? DEFAULT_SETTINGS.generatorMode,
+    maxCardsPerNote: rawSettings.maxCardsPerNote ?? DEFAULT_SETTINGS.maxCardsPerNote,
+    summaryLength: rawSettings.summaryLength ?? DEFAULT_SETTINGS.summaryLength,
+    aiModelConfigs,
+    activeAiModelId: aiModelConfigs.some((config) => config.id === activeAiModelId) ? activeAiModelId : "",
+    aiSectionCollapsed: typeof rawSettings.aiSectionCollapsed === "boolean" ? rawSettings.aiSectionCollapsed : DEFAULT_SETTINGS.aiSectionCollapsed,
+    ignoredFolders: rawSettings.ignoredFolders ?? DEFAULT_SETTINGS.ignoredFolders,
+    newCardsPerDay: rawSettings.newCardsPerDay ?? DEFAULT_SETTINGS.newCardsPerDay,
+    showAllCardsInReview: rawSettings.showAllCardsInReview ?? DEFAULT_SETTINGS.showAllCardsInReview,
+    learningStepsMinutes: rawSettings.learningStepsMinutes ?? DEFAULT_SETTINGS.learningStepsMinutes,
+    graduatingIntervalDays: rawSettings.graduatingIntervalDays ?? DEFAULT_SETTINGS.graduatingIntervalDays,
+    easyIntervalDays: rawSettings.easyIntervalDays ?? DEFAULT_SETTINGS.easyIntervalDays
   };
 }
 function buildSavedPluginData(data, settings) {

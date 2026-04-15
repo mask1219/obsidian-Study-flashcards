@@ -1,7 +1,8 @@
 import { requestUrl } from "obsidian";
+import { getActiveAiModelOrThrow, validateModelConfigForRequest } from "./aiModelState";
 import { createNewFlashcard } from "./cardFactory";
 import { GENERATION_COPY } from "./generationStrategy";
-import type { Flashcard, NoteFlashcardsSettings, ParsedSection } from "./types";
+import type { AiModelConfig, Flashcard, NoteFlashcardsSettings, ParsedSection } from "./types";
 
 type AiFlashcardPayload = {
   sectionIndex?: unknown;
@@ -26,10 +27,6 @@ const DEFAULT_SYSTEM_PROMPT = [
   "你只能基于用户提供的笔记内容生成闪卡，不要补充外部知识。",
   "输出必须是严格 JSON，不能输出 Markdown 代码块或额外解释。"
 ].join(" ");
-
-function isConfigured(settings: NoteFlashcardsSettings): boolean {
-  return settings.aiApiUrl.trim().length > 0 && settings.aiApiKey.trim().length > 0 && settings.aiModel.trim().length > 0;
-}
 
 function resolveProviderApiUrl(apiUrl: string, model: string): string {
   return apiUrl.includes("{model}") ? apiUrl.replace("{model}", encodeURIComponent(model)) : apiUrl;
@@ -72,11 +69,11 @@ function extractGeminiContent(response: unknown): string {
   return parts.map((part) => typeof part?.text === "string" ? part.text : "").join("").trim();
 }
 
-function extractProviderContent(response: unknown, settings: NoteFlashcardsSettings): string {
-  if (settings.aiProvider === "anthropic") {
+function extractProviderContent(response: unknown, provider: AiModelConfig["provider"]): string {
+  if (provider === "anthropic") {
     return extractAnthropicContent(response);
   }
-  if (settings.aiProvider === "gemini") {
+  if (provider === "gemini") {
     return extractGeminiContent(response);
   }
   return extractOpenAiContent(response);
@@ -117,14 +114,14 @@ function parseAiResponse(content: string): AiResponsePayload | null {
   }
 }
 
-function buildUserPrompt(sections: ParsedSection[], settings: NoteFlashcardsSettings): string {
+function buildUserPrompt(sections: ParsedSection[], settings: NoteFlashcardsSettings, modelConfig: AiModelConfig): string {
   const payload = sections.map((section, index) => ({
     sectionIndex: index,
     heading: section.heading,
     content: section.content,
     listItems: section.listItems
   }));
-  const extraPrompt = settings.aiPrompt.trim();
+  const extraPrompt = modelConfig.prompt.trim();
 
   return [
     `请根据下面的笔记分段生成最多 ${settings.maxCardsPerNote} 张中文问答闪卡。`,
@@ -165,17 +162,17 @@ function normalizeCards(
     });
 }
 
-function buildProviderRequest(userPrompt: string, settings: NoteFlashcardsSettings): {
+function buildProviderRequest(userPrompt: string, config: AiModelConfig): {
   url: string;
   headers: Record<string, string>;
   body: string;
 } {
-  const model = settings.aiModel.trim();
-  const apiKey = settings.aiApiKey.trim();
+  const model = config.model.trim();
+  const apiKey = config.apiKey.trim();
 
-  if (settings.aiProvider === "anthropic") {
+  if (config.provider === "anthropic") {
     return {
-      url: settings.aiApiUrl.trim(),
+      url: config.apiUrl.trim(),
       headers: {
         "x-api-key": apiKey,
         "anthropic-version": "2023-06-01"
@@ -195,9 +192,9 @@ function buildProviderRequest(userPrompt: string, settings: NoteFlashcardsSettin
     };
   }
 
-  if (settings.aiProvider === "gemini") {
+  if (config.provider === "gemini") {
     return {
-      url: resolveProviderApiUrl(settings.aiApiUrl.trim(), model),
+      url: resolveProviderApiUrl(config.apiUrl.trim(), model),
       headers: {
         "x-goog-api-key": apiKey
       },
@@ -219,9 +216,9 @@ function buildProviderRequest(userPrompt: string, settings: NoteFlashcardsSettin
     };
   }
 
-  if (settings.aiProvider === "azure-openai") {
+  if (config.provider === "azure-openai") {
     return {
-      url: resolveProviderApiUrl(settings.aiApiUrl.trim(), model),
+      url: resolveProviderApiUrl(config.apiUrl.trim(), model),
       headers: {
         "api-key": apiKey
       },
@@ -241,9 +238,9 @@ function buildProviderRequest(userPrompt: string, settings: NoteFlashcardsSettin
     };
   }
 
-  if (settings.aiProvider === "openrouter") {
+  if (config.provider === "openrouter") {
     return {
-      url: settings.aiApiUrl.trim(),
+      url: config.apiUrl.trim(),
       headers: {
         Authorization: `Bearer ${apiKey}`
       },
@@ -265,7 +262,7 @@ function buildProviderRequest(userPrompt: string, settings: NoteFlashcardsSettin
   }
 
   return {
-    url: settings.aiApiUrl.trim(),
+    url: config.apiUrl.trim(),
     headers: {
       Authorization: `Bearer ${apiKey}`
     },
@@ -298,8 +295,37 @@ function extractErrorDetail(status: number, json: unknown): string {
   return `HTTP ${status}`;
 }
 
-async function requestProviderContent(userPrompt: string, settings: NoteFlashcardsSettings): Promise<string> {
-  const requestConfig = buildProviderRequest(userPrompt, settings);
+function appendRawDetail(base: string, rawDetail: string): string {
+  return rawDetail.trim().length > 0 ? `${base}（${rawDetail}）` : base;
+}
+
+function toHttpErrorMessage(status: number, rawDetail: string): string {
+  if (status === 401 || status === 403) {
+    return appendRawDetail("鉴权失败，请检查 API Key 或账号权限", rawDetail);
+  }
+  if (status === 429) {
+    return appendRawDetail("请求过于频繁或配额不足，请稍后重试", rawDetail);
+  }
+  if (status >= 500) {
+    return appendRawDetail("模型服务异常，请稍后重试", rawDetail);
+  }
+  return appendRawDetail("请求失败，请检查模型配置或接口状态", rawDetail || `HTTP ${status}`);
+}
+
+function toNetworkErrorMessage(error: unknown): string {
+  const rawMessage = error instanceof Error ? error.message : "";
+  const normalized = rawMessage.toLowerCase();
+  if (normalized.includes("timeout")) {
+    return appendRawDetail("网络超时，请检查网络或稍后重试", rawMessage);
+  }
+  if (normalized.includes("network") || normalized.includes("unreachable") || normalized.includes("enotfound")) {
+    return appendRawDetail("网络请求失败，请检查网络连接和 API URL", rawMessage);
+  }
+  return appendRawDetail("网络请求失败，请检查网络连接和 API URL", rawMessage);
+}
+
+async function requestProviderContent(userPrompt: string, config: AiModelConfig): Promise<string> {
+  const requestConfig = buildProviderRequest(userPrompt, config);
   let response;
   try {
     response = await requestUrl({
@@ -311,27 +337,25 @@ async function requestProviderContent(userPrompt: string, settings: NoteFlashcar
       throw: false
     });
   } catch (error) {
-    const detail = error instanceof Error ? error.message : undefined;
-    throw new Error(GENERATION_COPY.errors.aiRequestFailed(detail));
+    throw new Error(GENERATION_COPY.errors.aiRequestFailed(toNetworkErrorMessage(error)));
   }
 
   if (response.status >= 400) {
-    throw new Error(GENERATION_COPY.errors.aiRequestFailed(extractErrorDetail(response.status, response.json)));
+    const rawDetail = extractErrorDetail(response.status, response.json);
+    throw new Error(GENERATION_COPY.errors.aiRequestFailed(toHttpErrorMessage(response.status, rawDetail)));
   }
 
-  return extractProviderContent(response.json, settings);
+  return extractProviderContent(response.json, config.provider);
 }
 
 export async function generateAiFlashcards(sections: ParsedSection[], settings: NoteFlashcardsSettings): Promise<Flashcard[]> {
-  if (!isConfigured(settings)) {
-    throw new Error(GENERATION_COPY.errors.aiNotConfigured);
-  }
+  const modelConfig = getActiveAiModelOrThrow(settings);
 
   if (sections.length === 0) {
     return [];
   }
 
-  const content = await requestProviderContent(buildUserPrompt(sections, settings), settings);
+  const content = await requestProviderContent(buildUserPrompt(sections, settings, modelConfig), modelConfig);
   const cards = normalizeCards(parseAiResponse(content), sections, settings);
   if (cards.length === 0) {
     throw new Error(GENERATION_COPY.errors.aiInvalidResponse);
@@ -340,13 +364,14 @@ export async function generateAiFlashcards(sections: ParsedSection[], settings: 
   return cards;
 }
 
-export async function testAiConnection(settings: NoteFlashcardsSettings): Promise<void> {
-  if (!isConfigured(settings)) {
-    throw new Error(GENERATION_COPY.errors.aiNotConfigured);
+export async function testAiConnection(modelConfig: AiModelConfig): Promise<void> {
+  const validationError = validateModelConfigForRequest(modelConfig);
+  if (validationError) {
+    throw new Error(validationError);
   }
 
   const probePrompt = "请回复任意简短文本。";
-  const content = await requestProviderContent(probePrompt, settings);
+  const content = await requestProviderContent(probePrompt, modelConfig);
   if (!content.trim()) {
     throw new Error(GENERATION_COPY.errors.aiInvalidResponse);
   }

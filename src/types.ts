@@ -46,17 +46,25 @@ export interface NoteFlashcardsSettings {
   generatorMode: GeneratorMode;
   maxCardsPerNote: number;
   summaryLength: number;
-  aiProvider: AiProvider;
-  aiApiUrl: string;
-  aiApiKey: string;
-  aiModel: string;
-  aiPrompt: string;
+  aiModelConfigs: AiModelConfig[];
+  activeAiModelId: string;
+  aiSectionCollapsed: boolean;
   ignoredFolders: string[];
   newCardsPerDay: number;
   showAllCardsInReview: boolean;
   learningStepsMinutes: number[];
   graduatingIntervalDays: number;
   easyIntervalDays: number;
+}
+
+export interface AiModelConfig {
+  id: string;
+  name: string;
+  provider: AiProvider;
+  apiUrl: string;
+  apiKey: string;
+  model: string;
+  prompt: string;
 }
 
 export interface FlashcardsData {

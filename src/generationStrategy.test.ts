@@ -1,3 +1,4 @@
+import { AI_MODEL_ERRORS } from "./aiModelState";
 import { describe, expect, it } from "vitest";
 import { GENERATION_COPY, generateCardsForSections } from "./generationStrategy";
 import type { NoteFlashcardsSettings, ParsedSection } from "./types";
@@ -16,11 +17,9 @@ function createSettings(overrides: Partial<NoteFlashcardsSettings> = {}): NoteFl
     generatorMode: "rule",
     maxCardsPerNote: 10,
     summaryLength: 100,
-    aiProvider: "openai-compatible",
-    aiApiUrl: "https://api.openai.com/v1/chat/completions",
-    aiApiKey: "",
-    aiModel: "",
-    aiPrompt: "",
+    aiModelConfigs: [],
+    activeAiModelId: "",
+    aiSectionCollapsed: true,
     ignoredFolders: [],
     newCardsPerDay: 10,
     showAllCardsInReview: false,
@@ -38,13 +37,11 @@ describe("generateCardsForSections", () => {
     expect(cards).toHaveLength(3);
   });
 
-  it("throws the AI not configured error in ai mode", async () => {
-    await expect(generateCardsForSections(SECTIONS, createSettings({ generatorMode: "ai" }))).rejects.toThrow(GENERATION_COPY.errors.aiNotConfigured);
+  it("throws when no AI model config is available in ai mode", async () => {
+    await expect(generateCardsForSections(SECTIONS, createSettings({ generatorMode: "ai" }))).rejects.toThrow(AI_MODEL_ERRORS.noConfigs);
   });
 
-  it("falls back to rule generation in hybrid mode when AI fails", async () => {
-    const cards = await generateCardsForSections(SECTIONS, createSettings({ generatorMode: "hybrid" }));
-
-    expect(cards).toHaveLength(3);
+  it("does not fall back to rule generation in hybrid mode when AI fails", async () => {
+    await expect(generateCardsForSections(SECTIONS, createSettings({ generatorMode: "hybrid" }))).rejects.toThrow(AI_MODEL_ERRORS.noConfigs);
   });
 });

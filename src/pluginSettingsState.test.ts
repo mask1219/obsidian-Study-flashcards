@@ -48,4 +48,21 @@ describe("pluginSettingsState", () => {
       ignoredFolders: ["Archive/"]
     });
   });
+
+  it("ignores legacy single-model fields and keeps new model list empty", () => {
+    expect(loadPersistedSettings({
+      settings: {
+        aiProvider: "openai-compatible",
+        aiApiUrl: "https://api.openai.com/v1/chat/completions",
+        aiApiKey: "legacy-key",
+        aiModel: "legacy-model",
+        aiPrompt: "legacy"
+      }
+    } as never)).toEqual({
+      ...DEFAULT_SETTINGS,
+      aiModelConfigs: [],
+      activeAiModelId: "",
+      aiSectionCollapsed: true
+    });
+  });
 });

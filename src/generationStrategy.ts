@@ -8,7 +8,6 @@ export const GENERATION_COPY = {
     generatedFolder: (count: number) => `批量生成完成，共生成 ${count} 张闪卡`
   },
   errors: {
-    aiNotConfigured: "AI 生成尚未配置，请先填写 AI 接口地址、API Key 和模型名。",
     aiRequestFailed: (detail?: string) => `AI 接口调用失败${detail ? `：${detail}` : ""}`,
     aiInvalidResponse: "AI 返回内容无法解析为闪卡，请确认所选 Provider 配置正确并返回有效 JSON。"
   }
@@ -20,11 +19,7 @@ export async function generateCardsForSections(sections: ParsedSection[], settin
   }
 
   if (settings.generatorMode === "hybrid") {
-    try {
-      return await generateAiFlashcards(sections, settings);
-    } catch (_error) {
-      return generateRuleFlashcards(sections, settings.summaryLength, settings.maxCardsPerNote);
-    }
+    return generateAiFlashcards(sections, settings);
   }
 
   return generateRuleFlashcards(sections, settings.summaryLength, settings.maxCardsPerNote);

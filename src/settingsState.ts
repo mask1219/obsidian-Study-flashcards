@@ -23,8 +23,23 @@ export const SETTINGS_COPY = {
     description: "限制单篇笔记生成的闪卡数量",
     placeholder: "12"
   },
+  aiModelsSection: {
+    name: "AI 模型配置",
+    description: "维护多个模型配置并选择当前生效模型，生成时将直接使用当前生效模型。",
+    addButton: "新增模型配置"
+  },
+  activeAiModel: {
+    name: "当前生效模型",
+    description: "生成闪卡时会直接使用该模型，不会二次询问",
+    placeholder: "请选择模型配置",
+    none: "未选择"
+  },
+  aiModelName: {
+    name: "配置名称",
+    placeholder: "例如：OpenAI-主配置"
+  },
   aiProvider: {
-    name: "AI Provider",
+    name: "Provider",
     description: "选择要调用的模型平台",
     options: {
       "openai-compatible": "OpenAI 兼容",
@@ -56,10 +71,21 @@ export const SETTINGS_COPY = {
   },
   aiConnectionTest: {
     name: "AI 连接测试",
-    description: "使用当前 Provider、接口地址、API Key 和模型名进行一次连通性验证",
+    description: "仅使用当前正在编辑的模型配置进行连通性验证",
     button: "测试连接",
     success: "AI 连接测试成功",
     failed: (detail?: string) => `AI 连接测试失败${detail ? `：${detail}` : ""}`
+  },
+  aiModelActions: {
+    edit: "编辑",
+    copy: "复制",
+    setDefault: "设为默认",
+    moveUp: "上移",
+    moveDown: "下移",
+    remove: "删除",
+    save: "保存模型配置",
+    cancel: "取消编辑",
+    defaultTag: "当前生效"
   },
   summaryLength: {
     name: "答案摘要长度",
