@@ -30,6 +30,7 @@ var DEFAULT_SETTINGS = {
   generatorMode: "rule",
   maxCardsPerNote: 12,
   summaryLength: 220,
+  mistakeTopicCardEntryEnabled: true,
   aiModelConfigs: [],
   activeAiModelId: "",
   aiSectionCollapsed: true,
@@ -47,6 +48,9 @@ var MISTAKE_AUTO_REMOVE_STREAK = 2;
 // src/cardState.ts
 function normalizeCard(card) {
   const createdAt = card.createdAt ?? (/* @__PURE__ */ new Date()).toISOString();
+  const generatedFromFlow = card.generatedFromFlow === "mistake-topic" ? card.generatedFromFlow : void 0;
+  const generatedFromCardId = typeof card.generatedFromCardId === "string" && card.generatedFromCardId.trim().length > 0 ? card.generatedFromCardId : void 0;
+  const generatedTopic = typeof card.generatedTopic === "string" && card.generatedTopic.trim().length > 0 ? card.generatedTopic : void 0;
   return {
     ...card,
     createdAt,
@@ -60,7 +64,10 @@ function normalizeCard(card) {
     learningStep: card.learningStep ?? 0,
     inMistakeBook: card.inMistakeBook ?? false,
     isMastered: card.isMastered ?? false,
-    mistakeSuccessStreak: card.mistakeSuccessStreak ?? 0
+    mistakeSuccessStreak: card.mistakeSuccessStreak ?? 0,
+    generatedFromFlow,
+    generatedFromCardId,
+    generatedTopic
   };
 }
 function clearMistakeBookState(card) {
@@ -103,6 +110,9 @@ function hasPrefixPath(path, prefix) {
   }
   return path.startsWith(normalizePrefix(prefix));
 }
+function normalizeDedupText(input) {
+  return input.toLowerCase().replace(/\s+/g, " ").trim();
+}
 var CardStore = class {
   constructor(loadData, saveData) {
     this.loadData = loadData;
@@ -135,6 +145,34 @@ var CardStore = class {
     const retained = data.cards.filter((card) => card.sourcePath !== sourcePath);
     await this.saveData({ ...data, cards: [...retained, ...newCards] });
     return newCards.length;
+  }
+  async appendCardsWithDedupe(newCards) {
+    if (newCards.length === 0) {
+      return { addedCount: 0, skippedCount: 0 };
+    }
+    const data = await this.getData();
+    const questionSignatures = new Set(data.cards.map((card) => normalizeDedupText(card.question)));
+    const qaSignatures = new Set(data.cards.map((card) => `${normalizeDedupText(card.question)}::${normalizeDedupText(card.answer)}`));
+    const appendableCards = [];
+    let skippedCount = 0;
+    for (const card of newCards) {
+      const questionSignature = normalizeDedupText(card.question);
+      const qaSignature = `${questionSignature}::${normalizeDedupText(card.answer)}`;
+      if (questionSignatures.has(questionSignature) || qaSignatures.has(qaSignature)) {
+        skippedCount += 1;
+        continue;
+      }
+      questionSignatures.add(questionSignature);
+      qaSignatures.add(qaSignature);
+      appendableCards.push(card);
+    }
+    if (appendableCards.length > 0) {
+      await this.saveData({ ...data, cards: [...data.cards, ...appendableCards] });
+    }
+    return {
+      addedCount: appendableCards.length,
+      skippedCount
+    };
   }
   async getCardsByPrefix(prefix) {
     const cards = await this.getCards();
@@ -188,63 +226,6 @@ var CardStore = class {
 // src/generationService.ts
 var import_obsidian2 = require("obsidian");
 
-// src/noteParser.ts
-function createDraft(heading = "\u6587\u6863\u6982\u8981", anchorText) {
-  return {
-    heading,
-    anchorText,
-    content: [],
-    listItems: []
-  };
-}
-function parseMarkdownSections(markdown, sourcePath) {
-  const lines = markdown.split(/\r?\n/);
-  const sections = [];
-  let currentSection = createDraft();
-  const pushSection = () => {
-    const content = currentSection.content.join("\n").trim();
-    if (!content && currentSection.listItems.length === 0) {
-      return;
-    }
-    sections.push({
-      heading: currentSection.heading,
-      content,
-      listItems: [...currentSection.listItems],
-      sourcePath,
-      sourceAnchorText: currentSection.anchorText ?? currentSection.heading,
-      sourceStartLine: currentSection.startLine,
-      sourceEndLine: currentSection.endLine
-    });
-  };
-  lines.forEach((rawLine, index) => {
-    const lineNumber = index + 1;
-    const line = rawLine.trim();
-    const headingMatch = /^#{1,6}\s+(.*)$/.exec(line);
-    if (headingMatch) {
-      pushSection();
-      const heading = headingMatch[1].trim();
-      currentSection = createDraft(heading, heading);
-      currentSection.startLine = lineNumber;
-      currentSection.endLine = lineNumber;
-      return;
-    }
-    if (line.length === 0) {
-      return;
-    }
-    if (!currentSection.startLine) {
-      currentSection.startLine = lineNumber;
-    }
-    currentSection.endLine = lineNumber;
-    currentSection.anchorText ?? (currentSection.anchorText = line);
-    if (/^[-*+]\s+/.test(line)) {
-      currentSection.listItems.push(line.replace(/^[-*+]\s+/, "").trim());
-    }
-    currentSection.content.push(line);
-  });
-  pushSection();
-  return sections;
-}
-
 // src/aiGenerator.ts
 var import_obsidian = require("obsidian");
 
@@ -265,6 +246,10 @@ var SETTINGS_COPY = {
       ai: "AI",
       hybrid: "\u6DF7\u5408"
     }
+  },
+  mistakeTopicCardEntry: {
+    name: "\u9519\u9898\u4E3B\u9898\u5B9A\u5411\u751F\u6210\u5165\u53E3",
+    description: "\u5728\u590D\u4E60\u9519\u9898\u65F6\u663E\u793A\u201C\u6309\u9519\u9898\u4E3B\u9898\u751F\u6210\u5B66\u4E60\u5361\u7247\u201D\u533A\u5757"
   },
   maxCardsPerNote: {
     name: "\u6BCF\u7BC7\u7B14\u8BB0\u6700\u5927\u5361\u7247\u6570",
@@ -299,7 +284,7 @@ var SETTINGS_COPY = {
   },
   aiApiUrl: {
     name: "AI \u63A5\u53E3\u5730\u5740",
-    description: "\u53EF\u81EA\u5B9A\u4E49\u5B8C\u6574\u63A5\u53E3\u5730\u5740\uFF1BGemini \u652F\u6301\u4F7F\u7528 {model} \u5360\u4F4D\u7B26",
+    description: "\u53EF\u81EA\u5B9A\u4E49\u5B8C\u6574\u63A5\u53E3\u5730\u5740\uFF1BGemini/Azure \u652F\u6301 {model} \u5360\u4F4D\u7B26\uFF0CAzure \u9700\u5C06 {resource} \u66FF\u6362\u4E3A\u771F\u5B9E\u8D44\u6E90\u540D",
     placeholder: "https://api.openai.com/v1/chat/completions"
   },
   aiApiKey: {
@@ -425,13 +410,33 @@ var REQUIRED_FIELD_LABELS = {
   apiKey: "API Key",
   model: "\u6A21\u578B\u540D"
 };
+var ALLOWED_MODEL_PLACEHOLDER = "{model}";
+var URL_PLACEHOLDER_PATTERN = /\{[^}]+\}/g;
 var AI_MODEL_ERRORS = {
   noConfigs: "\u672A\u914D\u7F6E\u4EFB\u4F55 AI \u6A21\u578B\uFF0C\u8BF7\u5148\u65B0\u589E\u6A21\u578B\u914D\u7F6E\u3002",
   noActiveModel: "\u672A\u9009\u62E9\u5F53\u524D\u751F\u6548\u6A21\u578B\uFF0C\u8BF7\u5148\u5728\u8BBE\u7F6E\u9875\u9009\u62E9\u3002",
   activeModelNotFound: "\u5F53\u524D\u751F\u6548\u6A21\u578B\u4E0D\u5B58\u5728\uFF0C\u8BF7\u91CD\u65B0\u9009\u62E9\u3002",
   unsupportedProvider: "Provider \u4E0D\u652F\u6301\uFF0C\u8BF7\u68C0\u67E5\u6A21\u578B\u914D\u7F6E\u3002",
-  missingFields: (fields) => `\u6A21\u578B\u914D\u7F6E\u7F3A\u5C11\u5FC5\u586B\u9879\uFF1A${fields.join("\u3001")}`
+  missingFields: (fields) => `\u6A21\u578B\u914D\u7F6E\u7F3A\u5C11\u5FC5\u586B\u9879\uFF1A${fields.join("\u3001")}`,
+  invalidApiUrl: "API URL \u683C\u5F0F\u65E0\u6548\uFF0C\u8BF7\u586B\u5199\u5B8C\u6574\u7684 http(s) \u5730\u5740\u3002",
+  invalidApiProtocol: "API URL \u4EC5\u652F\u6301 http(s) \u534F\u8BAE\u3002",
+  unresolvedUrlPlaceholders: (tokens) => `API URL \u5B58\u5728\u672A\u66FF\u6362\u5360\u4F4D\u7B26\uFF1A${tokens.join("\u3001")}\uFF0C\u8BF7\u586B\u5199\u771F\u5B9E\u5730\u5740\u3002`
 };
+function getAllowedUrlPlaceholders(provider) {
+  if (provider === "azure-openai" || provider === "gemini") {
+    return /* @__PURE__ */ new Set([ALLOWED_MODEL_PLACEHOLDER]);
+  }
+  return /* @__PURE__ */ new Set();
+}
+function getUnresolvedUrlPlaceholders(apiUrl, provider) {
+  const matched = apiUrl.match(URL_PLACEHOLDER_PATTERN);
+  if (!matched) {
+    return [];
+  }
+  const allowed = getAllowedUrlPlaceholders(provider);
+  const unresolved = matched.filter((token) => !allowed.has(token));
+  return Array.from(new Set(unresolved));
+}
 function createAiModelId() {
   return `model-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -507,6 +512,19 @@ function validateModelConfigForRequest(config) {
   }
   if (!isSupportedProvider(config.provider)) {
     return AI_MODEL_ERRORS.unsupportedProvider;
+  }
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(config.apiUrl.trim());
+  } catch (_error) {
+    return AI_MODEL_ERRORS.invalidApiUrl;
+  }
+  if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+    return AI_MODEL_ERRORS.invalidApiProtocol;
+  }
+  const unresolvedPlaceholders = getUnresolvedUrlPlaceholders(config.apiUrl.trim(), config.provider);
+  if (unresolvedPlaceholders.length > 0) {
+    return AI_MODEL_ERRORS.unresolvedUrlPlaceholders(unresolvedPlaceholders);
   }
   return null;
 }
@@ -604,6 +622,60 @@ function createNewFlashcard(question, answer, section, generatorType) {
   };
 }
 
+// src/ruleGenerator.ts
+function clip(text, maxLength) {
+  return text.length <= maxLength ? text : `${text.slice(0, maxLength).trim()}\u2026`;
+}
+function createCard(question, answer, section) {
+  return createNewFlashcard(question, answer, section, "rule");
+}
+function generateRuleFlashcards(sections, summaryLength, maxCardsPerNote) {
+  const cards = [];
+  for (const section of sections) {
+    if (cards.length >= maxCardsPerNote) {
+      break;
+    }
+    if (section.heading && section.content) {
+      cards.push(createCard(`\u201C${section.heading}\u201D\u8FD9\u4E00\u8282\u8BB2\u4E86\u4EC0\u4E48\uFF1F`, clip(section.content, summaryLength), section));
+    }
+    if (cards.length >= maxCardsPerNote) {
+      break;
+    }
+    if (section.listItems.length > 0) {
+      cards.push(createCard(`\u201C${section.heading}\u201D\u7684\u8981\u70B9\u6709\u54EA\u4E9B\uFF1F`, clip(section.listItems.join("\uFF1B"), summaryLength), section));
+    }
+    if (cards.length >= maxCardsPerNote) {
+      break;
+    }
+    const definitionMatch = /([^。！？:\n]{2,30})[：:](.+)/.exec(section.content);
+    if (definitionMatch) {
+      cards.push(createCard(`\u4EC0\u4E48\u662F${definitionMatch[1].trim()}\uFF1F`, clip(definitionMatch[2].trim(), summaryLength), section));
+    }
+  }
+  return cards.slice(0, maxCardsPerNote);
+}
+
+// src/generationStrategy.ts
+var GENERATION_COPY = {
+  notices: {
+    generatedFile: (basename, count) => `\u5DF2\u4E3A ${basename} \u751F\u6210 ${count} \u5F20\u95EA\u5361`,
+    generatedFolder: (count) => `\u6279\u91CF\u751F\u6210\u5B8C\u6210\uFF0C\u5171\u751F\u6210 ${count} \u5F20\u95EA\u5361`
+  },
+  errors: {
+    aiRequestFailed: (detail) => `AI \u63A5\u53E3\u8C03\u7528\u5931\u8D25${detail ? `\uFF1A${detail}` : ""}`,
+    aiInvalidResponse: "AI \u8FD4\u56DE\u5185\u5BB9\u65E0\u6CD5\u89E3\u6790\u4E3A\u95EA\u5361\uFF0C\u8BF7\u786E\u8BA4\u6240\u9009 Provider \u914D\u7F6E\u6B63\u786E\u5E76\u8FD4\u56DE\u6709\u6548 JSON\u3002"
+  }
+};
+async function generateCardsForSections(sections, settings) {
+  if (settings.generatorMode === "ai") {
+    return generateAiFlashcards(sections, settings);
+  }
+  if (settings.generatorMode === "hybrid") {
+    return generateAiFlashcards(sections, settings);
+  }
+  return generateRuleFlashcards(sections, settings.summaryLength, settings.maxCardsPerNote);
+}
+
 // src/aiGenerator.ts
 var DEFAULT_SYSTEM_PROMPT = [
   "\u4F60\u662F\u4E00\u4E2A\u4E25\u8C28\u7684\u5B66\u4E60\u5361\u7247\u751F\u6210\u52A9\u624B\u3002",
@@ -613,10 +685,45 @@ var DEFAULT_SYSTEM_PROMPT = [
 function resolveProviderApiUrl(apiUrl, model) {
   return apiUrl.includes("{model}") ? apiUrl.replace("{model}", encodeURIComponent(model)) : apiUrl;
 }
-function clip(text, maxLength) {
+function isResponsesEndpoint(apiUrl) {
+  try {
+    return /\/responses\/?$/.test(new URL(apiUrl).pathname);
+  } catch (_error) {
+    return false;
+  }
+}
+function clip2(text, maxLength) {
   return text.length <= maxLength ? text : `${text.slice(0, maxLength).trim()}\u2026`;
 }
+function collectResponsesText(value) {
+  if (typeof value === "string") {
+    return [value];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => collectResponsesText(item));
+  }
+  if (!value || typeof value !== "object") {
+    return [];
+  }
+  const payload = value;
+  return [
+    ...collectResponsesText(payload.output_text),
+    ...collectResponsesText(payload.text),
+    ...collectResponsesText(payload.content)
+  ];
+}
+function extractOpenAiResponsesContent(response) {
+  const payload = response;
+  return [
+    ...collectResponsesText(payload.output_text),
+    ...collectResponsesText(payload.output)
+  ].join("").trim();
+}
 function extractOpenAiContent(response) {
+  const responsesContent = extractOpenAiResponsesContent(response);
+  if (responsesContent) {
+    return responsesContent;
+  }
   const payload = response;
   const content = payload.choices?.[0]?.message?.content;
   if (typeof content === "string") {
@@ -682,6 +789,20 @@ function parseAiResponse(content) {
     return null;
   }
 }
+function parseAiTopicResponse(content) {
+  const cleaned = stripMarkdownCodeFence(content).trim();
+  if (!cleaned) {
+    return "";
+  }
+  try {
+    const parsed = JSON.parse(extractJsonText(cleaned));
+    if (typeof parsed.topic === "string") {
+      return parsed.topic.trim();
+    }
+  } catch (_error) {
+  }
+  return cleaned.split("\n").map((line) => line.trim()).find((line) => line.length > 0) ?? "";
+}
 function buildUserPrompt(sections, settings, modelConfig) {
   const payload = sections.map((section, index) => ({
     sectionIndex: index,
@@ -710,7 +831,7 @@ function normalizeCards(payload, sections, settings) {
     const card = item;
     const sectionIndex = typeof card.sectionIndex === "number" ? card.sectionIndex : -1;
     const question = typeof card.question === "string" ? card.question.trim() : "";
-    const answer = typeof card.answer === "string" ? clip(card.answer.trim(), settings.summaryLength) : "";
+    const answer = typeof card.answer === "string" ? clip2(card.answer.trim(), settings.summaryLength) : "";
     const section = sections[sectionIndex];
     if (!section || !question || !answer) {
       return [];
@@ -718,12 +839,27 @@ function normalizeCards(payload, sections, settings) {
     return [createNewFlashcard(question, answer, section, "ai")];
   });
 }
+function normalizeMistakeTopicCards(payload, section, maxCards, summaryLength) {
+  if (!payload || !Array.isArray(payload.cards)) {
+    return [];
+  }
+  return payload.cards.slice(0, maxCards).flatMap((item) => {
+    const card = item;
+    const question = typeof card.question === "string" ? card.question.trim() : "";
+    const answer = typeof card.answer === "string" ? clip2(card.answer.trim(), summaryLength) : "";
+    if (!question || !answer) {
+      return [];
+    }
+    return [createNewFlashcard(question, answer, section, "ai")];
+  });
+}
 function buildProviderRequest(userPrompt, config) {
+  const apiUrl = config.apiUrl.trim();
   const model = config.model.trim();
   const apiKey = config.apiKey.trim();
   if (config.provider === "anthropic") {
     return {
-      url: config.apiUrl.trim(),
+      url: apiUrl,
       headers: {
         "x-api-key": apiKey,
         "anthropic-version": "2023-06-01"
@@ -744,7 +880,7 @@ function buildProviderRequest(userPrompt, config) {
   }
   if (config.provider === "gemini") {
     return {
-      url: resolveProviderApiUrl(config.apiUrl.trim(), model),
+      url: resolveProviderApiUrl(apiUrl, model),
       headers: {
         "x-goog-api-key": apiKey
       },
@@ -769,7 +905,7 @@ ${userPrompt}`
   }
   if (config.provider === "azure-openai") {
     return {
-      url: resolveProviderApiUrl(config.apiUrl.trim(), model),
+      url: resolveProviderApiUrl(apiUrl, model),
       headers: {
         "api-key": apiKey
       },
@@ -789,14 +925,62 @@ ${userPrompt}`
     };
   }
   if (config.provider === "openrouter") {
+    const useResponsesApi2 = isResponsesEndpoint(apiUrl);
     return {
-      url: config.apiUrl.trim(),
+      url: apiUrl,
       headers: {
         Authorization: `Bearer ${apiKey}`
       },
       body: JSON.stringify({
         model,
         temperature: 0.2,
+        ...useResponsesApi2 ? {
+          input: [
+            {
+              role: "system",
+              content: DEFAULT_SYSTEM_PROMPT
+            },
+            {
+              role: "user",
+              content: userPrompt
+            }
+          ]
+        } : {
+          messages: [
+            {
+              role: "system",
+              content: DEFAULT_SYSTEM_PROMPT
+            },
+            {
+              role: "user",
+              content: userPrompt
+            }
+          ]
+        }
+      })
+    };
+  }
+  const useResponsesApi = isResponsesEndpoint(apiUrl);
+  return {
+    url: apiUrl,
+    headers: {
+      Authorization: `Bearer ${apiKey}`
+    },
+    body: JSON.stringify({
+      model,
+      temperature: 0.2,
+      ...useResponsesApi ? {
+        input: [
+          {
+            role: "system",
+            content: DEFAULT_SYSTEM_PROMPT
+          },
+          {
+            role: "user",
+            content: userPrompt
+          }
+        ]
+      } : {
         messages: [
           {
             role: "system",
@@ -807,27 +991,7 @@ ${userPrompt}`
             content: userPrompt
           }
         ]
-      })
-    };
-  }
-  return {
-    url: config.apiUrl.trim(),
-    headers: {
-      Authorization: `Bearer ${apiKey}`
-    },
-    body: JSON.stringify({
-      model,
-      temperature: 0.2,
-      messages: [
-        {
-          role: "system",
-          content: DEFAULT_SYSTEM_PROMPT
-        },
-        {
-          role: "user",
-          content: userPrompt
-        }
-      ]
+      }
     })
   };
 }
@@ -901,6 +1065,58 @@ async function generateAiFlashcards(sections, settings) {
   }
   return cards;
 }
+async function generateAiTopicFromCard(card, settings) {
+  const modelConfig = getActiveAiModelOrThrow(settings);
+  const sourceContext = [
+    card.sourceHeading ? `sourceHeading=${card.sourceHeading}` : "",
+    card.sourceAnchorText ? `sourceAnchorText=${card.sourceAnchorText}` : "",
+    `question=${card.question}`,
+    `answer=${card.answer}`
+  ].filter(Boolean).join("\n");
+  const prompt = [
+    "\u8BF7\u57FA\u4E8E\u4EE5\u4E0B\u9519\u9898\u4FE1\u606F\u8BC6\u522B\u4E00\u4E2A\u6700\u6838\u5FC3\u7684\u5B66\u4E60\u4E3B\u9898\u3002",
+    '\u53EA\u8FD4\u56DE JSON\uFF1A{"topic":"\u4E3B\u9898"}',
+    "\u4E3B\u9898\u5FC5\u987B\u7B80\u6D01\uFF082-24\u5B57\uFF09\uFF0C\u4E0D\u8981\u8F93\u51FA\u89E3\u91CA\u3002",
+    sourceContext
+  ].join("\n");
+  const content = await requestProviderContent(prompt, modelConfig);
+  const topic = parseAiTopicResponse(content);
+  if (!topic) {
+    throw new Error("AI \u672A\u8FD4\u56DE\u53EF\u7528\u4E3B\u9898\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5\u3002");
+  }
+  return topic;
+}
+async function generateAiFlashcardsForMistakeTopic(card, topic, settings, targetCount = 5) {
+  const modelConfig = getActiveAiModelOrThrow(settings);
+  const section = {
+    heading: card.sourceHeading?.trim() || topic,
+    content: [card.question, card.answer].filter(Boolean).join("\n"),
+    listItems: [],
+    sourcePath: card.sourcePath,
+    sourceAnchorText: card.sourceAnchorText,
+    sourceStartLine: card.sourceStartLine,
+    sourceEndLine: card.sourceEndLine
+  };
+  const prompt = [
+    `\u4F60\u6B63\u5728\u4E3A\u9519\u9898\u4E3B\u9898\u201C${topic}\u201D\u751F\u6210\u8865\u5F3A\u95EA\u5361\u3002`,
+    `\u8BF7\u4E25\u683C\u751F\u6210 ${targetCount} \u5F20\u4E2D\u6587\u95EE\u7B54\u5361\u7247\u3002`,
+    `\u6BCF\u5F20\u5361\u7247 answer \u5C3D\u91CF\u63A7\u5236\u5728 ${settings.summaryLength} \u5B57\u4EE5\u5185\u3002`,
+    "\u4E0D\u8981\u91CD\u590D\u539F\u9519\u9898\u8868\u8FF0\uFF0C\u4F18\u5148\u8986\u76D6\u5B9A\u4E49\u3001\u6613\u9519\u70B9\u3001\u5BF9\u6BD4\u3001\u5E94\u7528\u573A\u666F\u3002",
+    '\u4EC5\u8F93\u51FA JSON\uFF0C\u683C\u5F0F\uFF1A{"cards":[{"question":"\u95EE\u9898","answer":"\u7B54\u6848"}]}',
+    `\u9519\u9898\u95EE\u9898\uFF1A${card.question}`,
+    `\u9519\u9898\u7B54\u6848\uFF1A${card.answer}`,
+    modelConfig.prompt.trim().length > 0 ? `\u989D\u5916\u8981\u6C42\uFF1A${modelConfig.prompt.trim()}` : ""
+  ].filter(Boolean).join("\n");
+  const content = await requestProviderContent(prompt, modelConfig);
+  const cards = normalizeMistakeTopicCards(parseAiResponse(content), section, targetCount, settings.summaryLength);
+  if (cards.length === 0) {
+    throw new Error(GENERATION_COPY.errors.aiInvalidResponse);
+  }
+  if (cards.length < targetCount) {
+    throw new Error(`AI \u8FD4\u56DE\u5361\u7247\u6570\u91CF\u4E0D\u8DB3\uFF1A\u671F\u671B ${targetCount} \u5F20\uFF0C\u5B9E\u9645 ${cards.length} \u5F20\u3002`);
+  }
+  return cards;
+}
 async function testAiConnection(modelConfig) {
   const validationError = validateModelConfigForRequest(modelConfig);
   if (validationError) {
@@ -913,58 +1129,313 @@ async function testAiConnection(modelConfig) {
   }
 }
 
-// src/ruleGenerator.ts
-function clip2(text, maxLength) {
-  return text.length <= maxLength ? text : `${text.slice(0, maxLength).trim()}\u2026`;
-}
-function createCard(question, answer, section) {
-  return createNewFlashcard(question, answer, section, "rule");
-}
-function generateRuleFlashcards(sections, summaryLength, maxCardsPerNote) {
-  const cards = [];
-  for (const section of sections) {
-    if (cards.length >= maxCardsPerNote) {
-      break;
-    }
-    if (section.heading && section.content) {
-      cards.push(createCard(`\u201C${section.heading}\u201D\u8FD9\u4E00\u8282\u8BB2\u4E86\u4EC0\u4E48\uFF1F`, clip2(section.content, summaryLength), section));
-    }
-    if (cards.length >= maxCardsPerNote) {
-      break;
-    }
-    if (section.listItems.length > 0) {
-      cards.push(createCard(`\u201C${section.heading}\u201D\u7684\u8981\u70B9\u6709\u54EA\u4E9B\uFF1F`, clip2(section.listItems.join("\uFF1B"), summaryLength), section));
-    }
-    if (cards.length >= maxCardsPerNote) {
-      break;
-    }
-    const definitionMatch = /([^。！？:\n]{2,30})[：:](.+)/.exec(section.content);
-    if (definitionMatch) {
-      cards.push(createCard(`\u4EC0\u4E48\u662F${definitionMatch[1].trim()}\uFF1F`, clip2(definitionMatch[2].trim(), summaryLength), section));
-    }
-  }
-  return cards.slice(0, maxCardsPerNote);
-}
-
-// src/generationStrategy.ts
-var GENERATION_COPY = {
-  notices: {
-    generatedFile: (basename, count) => `\u5DF2\u4E3A ${basename} \u751F\u6210 ${count} \u5F20\u95EA\u5361`,
-    generatedFolder: (count) => `\u6279\u91CF\u751F\u6210\u5B8C\u6210\uFF0C\u5171\u751F\u6210 ${count} \u5F20\u95EA\u5361`
+// src/reviewCopy.ts
+var REVIEW_COPY = {
+  displayName: "Note Flashcards",
+  filters: {
+    source: "\u6765\u6E90",
+    all: "\u5168\u90E8",
+    current: "\u5F53\u524D\u7B14\u8BB0",
+    folder: "\u5F53\u524D\u6587\u4EF6\u5939",
+    mistakes: "\u9519\u9898\u672C"
   },
-  errors: {
-    aiRequestFailed: (detail) => `AI \u63A5\u53E3\u8C03\u7528\u5931\u8D25${detail ? `\uFF1A${detail}` : ""}`,
-    aiInvalidResponse: "AI \u8FD4\u56DE\u5185\u5BB9\u65E0\u6CD5\u89E3\u6790\u4E3A\u95EA\u5361\uFF0C\u8BF7\u786E\u8BA4\u6240\u9009 Provider \u914D\u7F6E\u6B63\u786E\u5E76\u8FD4\u56DE\u6709\u6548 JSON\u3002"
+  buttons: {
+    refreshQueue: "\u5237\u65B0\u961F\u5217",
+    clearMasteredMistakes: "\u6E05\u7A7A\u5DF2\u638C\u63E1\u9519\u9898",
+    clearMasteredMistakesWithCount: (count) => `\u6E05\u7A7A\u5DF2\u638C\u63E1\u9519\u9898\uFF08${count}\uFF09`,
+    generateCurrentNote: "\u751F\u6210\u5F53\u524D\u7B14\u8BB0",
+    generateCurrentFolder: "\u751F\u6210\u5F53\u524D\u6587\u4EF6\u5939",
+    showAllNewCards: "\u67E5\u770B\u5168\u90E8\u65B0\u5361",
+    switchToMistakes: "\u5207\u5230\u9519\u9898\u672C",
+    flipToAnswer: "\u67E5\u770B\u7B54\u6848",
+    flipToQuestion: "\u56DE\u5230\u95EE\u9898",
+    openSource: "\u6253\u5F00\u539F\u6587",
+    addToMistakes: "\u52A0\u5165\u9519\u9898\u672C",
+    removeFromMistakes: "\u79FB\u51FA\u9519\u9898\u672C",
+    markMastered: "\u6807\u8BB0\u5DF2\u638C\u63E1",
+    unmarkMastered: "\u53D6\u6D88\u5DF2\u638C\u63E1",
+    previous: "\u4E0A\u4E00\u5F20",
+    next: "\u4E0B\u4E00\u5F20"
+  },
+  notices: {
+    noCurrentNote: "\u5F53\u524D\u6CA1\u6709\u53EF\u7528\u7684\u7B14\u8BB0",
+    cannotReadCurrentNote: "\u65E0\u6CD5\u8BFB\u53D6\u5F53\u524D\u7B14\u8BB0",
+    noCurrentFolder: "\u5F53\u524D\u6CA1\u6709\u53EF\u7528\u7684\u7236\u6587\u4EF6\u5939",
+    sourceNotFound: "\u627E\u4E0D\u5230\u539F\u6587\u7B14\u8BB0",
+    removedFromMistakes: "\u5DF2\u79FB\u51FA\u9519\u9898\u672C",
+    addedToMistakes: "\u5DF2\u52A0\u5165\u9519\u9898\u672C",
+    noMasteredMistakesToClear: "\u5F53\u524D\u6CA1\u6709\u5DF2\u638C\u63E1\u7684\u9519\u9898\u53EF\u6E05\u7406",
+    clearedMasteredMistakes: (count) => `\u5DF2\u6E05\u7406 ${count} \u5F20\u5DF2\u638C\u63E1\u9519\u9898`,
+    refreshed: "\u95EA\u5361\u5217\u8868\u5DF2\u5237\u65B0",
+    mistakeTopicGenerated: (count) => `\u5DF2\u65B0\u589E ${count} \u5F20\u4E0E\u5F53\u524D\u9519\u9898\u4E3B\u9898\u76F8\u5173\u7684\u5B66\u4E60\u5361\u7247\u3002`,
+    mistakeTopicGeneratedPartial: (addedCount, skippedCount) => `\u5DF2\u65B0\u589E ${addedCount} \u5F20\u5361\u7247\uFF0C\u8DF3\u8FC7 ${skippedCount} \u5F20\u91CD\u590D\u5361\u7247\u3002`,
+    mistakeTopicAllDuplicated: "\u5F53\u524D\u4E3B\u9898\u76F8\u5173\u5361\u7247\u5DF2\u5B58\u5728\uFF0C\u672C\u6B21\u672A\u65B0\u589E\u5361\u7247\u3002"
+  },
+  cardFace: {
+    question: "\u95EE\u9898",
+    answer: "\u7B54\u6848"
+  },
+  stats: {
+    queue: "\u5F53\u524D\u961F\u5217",
+    sourceTotal: "\u5F53\u524D\u6765\u6E90\u603B\u5361",
+    mistakeTotal: "\u9519\u9898\u672C\u603B\u6570",
+    priorityMistakes: "\u4F18\u5148\u9519\u9898",
+    masteredPendingClear: "\u5DF2\u638C\u63E1\u5F85\u6E05\u7406",
+    cardCount: (count) => `${count} \u5F20`
+  },
+  meta: {
+    shortcutHint: "\u7A7A\u683C\u7FFB\u9762 \xB7 \u2190 \u2192 \u5207\u6362",
+    dueCount: "\u5F85\u590D\u4E60",
+    queueCount: "\u5F53\u524D\u961F\u5217",
+    sourceCount: "\u5F53\u524D\u6765\u6E90",
+    mistakeCount: "\u9519\u9898\u672C",
+    inMistakeBook: "\u9519\u9898\u672C\u4E2D",
+    position: "\u7B2C",
+    summary: (dueCount, totalCount, totalCards, mistakeBookCount) => `${REVIEW_COPY.meta.dueCount} ${dueCount} \u5F20 \xB7 ${REVIEW_COPY.meta.queueCount} ${totalCount} \u5F20 \xB7 ${REVIEW_COPY.meta.sourceCount} ${totalCards} \u5F20 \xB7 ${REVIEW_COPY.meta.mistakeCount} ${mistakeBookCount} \u5F20`,
+    limitedNewCards: (totalNewCards, newCardLimit) => `\u5F53\u524D\u6765\u6E90\u5171\u6709 ${totalNewCards} \u5F20\u65B0\u5361\uFF0C\u6309\u6BCF\u65E5\u65B0\u5361\u4E0A\u9650\u4EC5\u5C55\u793A\u524D ${newCardLimit} \u5F20\u3002`,
+    positionLabel: (index, total) => `${REVIEW_COPY.meta.position} ${index} \u5F20 / \u5171 ${total} \u5F20`
+  },
+  emptyState: {
+    mistakesTitle: "\u9519\u9898\u672C\u76EE\u524D\u662F\u7A7A\u7684\u3002",
+    mistakesDescription: "\u4F60\u53EF\u4EE5\u5728\u5361\u7247\u64CD\u4F5C\u4E2D\u624B\u52A8\u52A0\u5165\u9519\u9898\u672C\u3002",
+    limitedTitle: "\u5F53\u524D\u4F18\u5148\u961F\u5217\u5DF2\u5B8C\u6210\uFF0C\u8FD8\u53EF\u4EE5\u7EE7\u7EED\u67E5\u770B\u5269\u4F59\u65B0\u5361\u3002",
+    noCardsTitle: "\u5F53\u524D\u6CA1\u6709\u53EF\u590D\u4E60\u7684\u5361\u7247\u3002",
+    noCardsDescription: "\u4F60\u53EF\u4EE5\u5148\u751F\u6210\u5F53\u524D\u7B14\u8BB0\u6216\u5F53\u524D\u6587\u4EF6\u5939\u7684\u95EA\u5361\u3002"
+  },
+  study: {
+    scopeLabel: "\u8303\u56F4",
+    countModeLabel: "\u6570\u91CF",
+    orderModeLabel: "\u987A\u5E8F",
+    onlyMistakesLabel: "\u53EA\u505A\u9519\u9898\u672C",
+    excludeMasteredLabel: "\u6392\u9664\u5DF2\u638C\u63E1",
+    scope: {
+      current: "\u5F53\u524D\u7B14\u8BB0",
+      folder: "\u5F53\u524D\u6587\u4EF6\u5939",
+      all: "\u5168\u90E8"
+    },
+    countMode: {
+      random10: "\u968F\u673A 10 \u9898",
+      all: "\u5168\u90E8"
+    },
+    orderMode: {
+      random: "\u968F\u673A",
+      sequential: "\u987A\u5E8F"
+    },
+    badges: {
+      mastered: "\u5DF2\u638C\u63E1",
+      mistake: "\u9519\u9898\u672C",
+      learning: "\u5B66\u4E60\u4E2D"
+    },
+    stats: {
+      mistakes: "\u9519\u9898\u672C",
+      mastered: "\u5DF2\u638C\u63E1",
+      learning: "\u5B66\u4E60\u4E2D"
+    },
+    emptyState: {
+      title: "\u5F53\u524D\u6761\u4EF6\u4E0B\u6CA1\u6709\u53EF\u5B66\u4E60\u7684\u5361\u7247\u3002",
+      description: "\u4F60\u53EF\u4EE5\u8C03\u6574\u7B5B\u9009\u6761\u4EF6\uFF0C\u6216\u5148\u751F\u6210\u5F53\u524D\u7B14\u8BB0/\u6587\u4EF6\u5939\u7684\u5361\u7247\u3002"
+    },
+    selectionSummary: (scope, countMode, orderMode, mistakesOnly, excludeMastered) => {
+      const filters = [mistakesOnly ? "\u53EA\u505A\u9519\u9898\u672C" : "", excludeMastered ? "\u6392\u9664\u5DF2\u638C\u63E1" : ""].filter(Boolean).join(" \xB7 ");
+      return [scope, countMode, orderMode, filters].filter(Boolean).join(" \xB7 ");
+    }
+  },
+  mistakeTopic: {
+    title: "\u9519\u9898\u4E3B\u9898\u5361\u7247\u533A\u5757",
+    topicLabel: "\u5F53\u524D\u4E3B\u9898",
+    loading: "\u6B63\u5728\u8BC6\u522B\u5F53\u524D\u9519\u9898\u4E3B\u9898...",
+    generateButton: "\u6309\u9519\u9898\u4E3B\u9898\u751F\u6210\u5B66\u4E60\u5361\u7247",
+    generatingButton: "\u751F\u6210\u4E2D...",
+    noTopic: "\u5F53\u524D\u9519\u9898\u6682\u672A\u8BC6\u522B\u5230\u53EF\u7528\u4E3B\u9898\u3002",
+    nonMistake: "\u5F53\u524D\u5361\u7247\u4E0D\u5728\u9519\u9898\u672C\u4E2D\uFF0C\u65E0\u6CD5\u89E6\u53D1\u8BE5\u80FD\u529B\u3002",
+    aiRequired: "\u8BE5\u80FD\u529B\u9700\u8981\u53EF\u7528\u7684 AI \u751F\u6210\u80FD\u529B\uFF0C\u8BF7\u5207\u6362\u5230 AI \u6216\u6DF7\u5408\u6A21\u5F0F\u3002",
+    noAiModel: "\u5F53\u524D\u672A\u914D\u7F6E\u53EF\u7528 AI \u6A21\u578B\uFF0C\u6682\u65F6\u65E0\u6CD5\u6309\u9519\u9898\u4E3B\u9898\u751F\u6210\u5361\u7247\u3002",
+    writeFailed: "\u5361\u7247\u5DF2\u751F\u6210\uFF0C\u4F46\u5199\u5165\u672C\u5730\u5361\u7247\u5E93\u5931\u8D25\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5\u3002"
   }
 };
-async function generateCardsForSections(sections, settings) {
-  if (settings.generatorMode === "ai") {
-    return generateAiFlashcards(sections, settings);
+
+// src/mistakeTopicState.ts
+var TOPIC_HINT_KEYWORDS = ["\u8868", "\u6811", "\u56FE", "\u7B97\u6CD5", "\u5B9A\u5F8B", "\u516C\u5F0F", "\u51FD\u6570", "\u534F\u8BAE", "\u6A21\u578B", "\u7ED3\u6784", "\u6982\u5FF5", "\u539F\u7406", "\u7CFB\u7EDF"];
+var QUESTION_STOP_WORDS = /* @__PURE__ */ new Set([
+  "\u4EC0\u4E48",
+  "\u54EA\u4E9B",
+  "\u54EA\u4E2A",
+  "\u54EA\u9879",
+  "\u5982\u4F55",
+  "\u4E3A\u4EC0\u4E48",
+  "\u600E\u4E48",
+  "\u662F\u5426",
+  "\u53EF\u4EE5",
+  "\u4E0D\u80FD",
+  "\u6B63\u786E",
+  "\u9519\u8BEF",
+  "\u4EE5\u4E0B",
+  "\u5173\u4E8E",
+  "\u7684\u662F",
+  "\u6709\u54EA",
+  "\u8BF7\u95EE"
+]);
+var GENERIC_TOPIC_PATTERNS = ["\u8FD9\u9053\u9898", "\u672C\u9898", "\u4E0B\u5217", "\u4E0B\u8FF0", "\u95EE\u9898", "\u9009\u9879"];
+function stripMarkdown(text) {
+  return text.replace(/`[^`]*`/g, " ").replace(/\[[^\]]*\]\([^)]+\)/g, " ").replace(/[>*#_\-\n\r\t]/g, " ").replace(/\s+/g, " ").trim();
+}
+function normalizeTopicCandidate(raw) {
+  const cleaned = stripMarkdown(raw).replace(/^[：:;；,.，。!?！？()\[\]【】\s]+/g, "").replace(/[：:;；,.，。!?！？()\[\]【】\s]+$/g, "").replace(/^关于/g, "").trim();
+  if (cleaned.length < 2 || cleaned.length > 24) {
+    return null;
   }
-  if (settings.generatorMode === "hybrid") {
-    return generateAiFlashcards(sections, settings);
+  return cleaned;
+}
+function trimPossessiveSuffix(candidate) {
+  const parts = candidate.split("\u7684");
+  if (parts.length < 2) {
+    return candidate;
   }
-  return generateRuleFlashcards(sections, settings.summaryLength, settings.maxCardsPerNote);
+  const prefix = parts[0].trim();
+  const suffix = parts.slice(1).join("\u7684").trim();
+  if (prefix.length >= 2 && suffix.length <= 4) {
+    return prefix;
+  }
+  return candidate;
+}
+function scoreQuestionToken(token) {
+  if (QUESTION_STOP_WORDS.has(token)) {
+    return -1;
+  }
+  if (GENERIC_TOPIC_PATTERNS.some((pattern) => token.includes(pattern))) {
+    return -1;
+  }
+  if (/^请/.test(token)) {
+    return -1;
+  }
+  let score = token.length;
+  if (TOPIC_HINT_KEYWORDS.some((keyword) => token.includes(keyword))) {
+    score += 6;
+  }
+  if (/^[A-Za-z]/.test(token)) {
+    score += 2;
+  }
+  return score;
+}
+function extractTopicFromQuestion(question) {
+  const normalizedQuestion = stripMarkdown(question);
+  const topicBeforeQuestionPattern = /([\u4e00-\u9fa5A-Za-z0-9#+\-]{2,24})(?:的)?(?:是什么|是啥|作用|特点|原理|步骤|复杂度|区别|定义|如何|为什么|怎么|有哪些|包括|属于)/;
+  const match = topicBeforeQuestionPattern.exec(normalizedQuestion);
+  if (match?.[1]) {
+    const candidate = normalizeTopicCandidate(trimPossessiveSuffix(match[1].replace(/^(请问|关于)/, "").trim()));
+    if (candidate) {
+      return candidate;
+    }
+  }
+  const tokens = normalizedQuestion.match(/[A-Za-z][A-Za-z0-9#+\-]{1,20}|[\u4e00-\u9fa5]{2,12}/g) ?? [];
+  const ranked = tokens.map((token) => ({ token, score: scoreQuestionToken(token) })).filter((entry) => entry.score > 0).sort((a, b) => b.score - a.score);
+  const best = ranked[0]?.token;
+  return best ? normalizeTopicCandidate(best) : null;
+}
+function toAiFallbackError(message) {
+  if (message === AI_MODEL_ERRORS.noConfigs || message === AI_MODEL_ERRORS.noActiveModel || message === AI_MODEL_ERRORS.activeModelNotFound || message.startsWith("\u6A21\u578B\u914D\u7F6E\u7F3A\u5C11\u5FC5\u586B\u9879")) {
+    return REVIEW_COPY.mistakeTopic.noAiModel;
+  }
+  return message;
+}
+function canGenerateByMistakeTopic(settings) {
+  return settings.generatorMode === "ai" || settings.generatorMode === "hybrid";
+}
+async function resolveMistakeTopic(card, settings, resolveAiTopic) {
+  const sourceHeadingTopic = normalizeTopicCandidate(card.sourceHeading ?? "");
+  if (sourceHeadingTopic) {
+    return { topic: sourceHeadingTopic, source: "sourceHeading" };
+  }
+  const sourceAnchorTopic = normalizeTopicCandidate(card.sourceAnchorText ?? "");
+  if (sourceAnchorTopic) {
+    return { topic: sourceAnchorTopic, source: "sourceAnchorText" };
+  }
+  const questionTopic = extractTopicFromQuestion(card.question);
+  if (questionTopic) {
+    return { topic: questionTopic, source: "question" };
+  }
+  if (!canGenerateByMistakeTopic(settings)) {
+    return {
+      topic: null,
+      source: null,
+      error: REVIEW_COPY.mistakeTopic.noTopic
+    };
+  }
+  try {
+    const aiTopic = normalizeTopicCandidate(await resolveAiTopic(card, settings));
+    if (aiTopic) {
+      return { topic: aiTopic, source: "ai" };
+    }
+    return {
+      topic: null,
+      source: null,
+      error: REVIEW_COPY.mistakeTopic.noTopic
+    };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : REVIEW_COPY.mistakeTopic.noTopic;
+    return {
+      topic: null,
+      source: null,
+      error: toAiFallbackError(detail)
+    };
+  }
+}
+
+// src/noteParser.ts
+function createDraft(heading = "\u6587\u6863\u6982\u8981", anchorText) {
+  return {
+    heading,
+    anchorText,
+    content: [],
+    listItems: []
+  };
+}
+function parseMarkdownSections(markdown, sourcePath) {
+  const lines = markdown.split(/\r?\n/);
+  const sections = [];
+  let currentSection = createDraft();
+  const pushSection = () => {
+    const content = currentSection.content.join("\n").trim();
+    if (!content && currentSection.listItems.length === 0) {
+      return;
+    }
+    sections.push({
+      heading: currentSection.heading,
+      content,
+      listItems: [...currentSection.listItems],
+      sourcePath,
+      sourceAnchorText: currentSection.anchorText ?? currentSection.heading,
+      sourceStartLine: currentSection.startLine,
+      sourceEndLine: currentSection.endLine
+    });
+  };
+  lines.forEach((rawLine, index) => {
+    const lineNumber = index + 1;
+    const line = rawLine.trim();
+    const headingMatch = /^#{1,6}\s+(.*)$/.exec(line);
+    if (headingMatch) {
+      pushSection();
+      const heading = headingMatch[1].trim();
+      currentSection = createDraft(heading, heading);
+      currentSection.startLine = lineNumber;
+      currentSection.endLine = lineNumber;
+      return;
+    }
+    if (line.length === 0) {
+      return;
+    }
+    if (!currentSection.startLine) {
+      currentSection.startLine = lineNumber;
+    }
+    currentSection.endLine = lineNumber;
+    currentSection.anchorText ?? (currentSection.anchorText = line);
+    if (/^[-*+]\s+/.test(line)) {
+      currentSection.listItems.push(line.replace(/^[-*+]\s+/, "").trim());
+    }
+    currentSection.content.push(line);
+  });
+  pushSection();
+  return sections;
 }
 
 // src/studySession.ts
@@ -1043,7 +1514,7 @@ function toTimestamp(value) {
   const parsed = Date.parse(value);
   return Number.isNaN(parsed) ? 0 : parsed;
 }
-function buildDueQueue(cards, settings, now) {
+function buildDueQueue(cards, settings, now, countMode) {
   const dueCards = cards.filter((card) => isDueCard(card, now));
   if (dueCards.length === 0) {
     return settings.showAllCardsInReview ? cards : [];
@@ -1051,7 +1522,7 @@ function buildDueQueue(cards, settings, now) {
   const dueReviewCards = dueCards.filter((card) => card.cardState !== "new");
   const dueNewCards = dueCards.filter((card) => card.cardState === "new").sort((a, b) => toTimestamp(a.createdAt) - toTimestamp(b.createdAt));
   const newCardsPerDay = Math.max(0, settings.newCardsPerDay);
-  const limitedDueNewCards = newCardsPerDay > 0 ? dueNewCards.slice(0, newCardsPerDay) : [];
+  const limitedDueNewCards = countMode === "all" ? dueNewCards : newCardsPerDay > 0 ? dueNewCards.slice(0, newCardsPerDay) : [];
   return [...dueReviewCards, ...limitedDueNewCards];
 }
 function applyStudyFilters(cards, options) {
@@ -1069,6 +1540,9 @@ var GenerationService = class {
     this.vault = vault;
     this.store = store;
     this.settings = settings;
+  }
+  getSettingsSnapshot() {
+    return this.settings();
   }
   getFileByPath(path) {
     const file = this.vault.getAbstractFileByPath(path);
@@ -1106,8 +1580,43 @@ var GenerationService = class {
   async getStudySession(options, sessionCardIds) {
     const cards = await this.getCardsForSource(options.scope, options.sourcePath);
     const filteredCards = applyStudyFilters(cards, options);
-    const reviewQueue = buildDueQueue(filteredCards, this.settings(), /* @__PURE__ */ new Date());
+    const reviewQueue = buildDueQueue(filteredCards, this.settings(), /* @__PURE__ */ new Date(), options.countMode);
     return getStudySession(reviewQueue, options, Math.random, sessionCardIds);
+  }
+  async resolveMistakeTopicForCard(card) {
+    return resolveMistakeTopic(card, this.settings(), generateAiTopicFromCard);
+  }
+  async generateForMistakeTopic(card) {
+    if (!card.inMistakeBook) {
+      throw new Error(REVIEW_COPY.mistakeTopic.nonMistake);
+    }
+    const settings = this.settings();
+    if (!canGenerateByMistakeTopic(settings)) {
+      throw new Error(REVIEW_COPY.mistakeTopic.aiRequired);
+    }
+    const resolved = await this.resolveMistakeTopicForCard(card);
+    if (!resolved.topic) {
+      throw new Error(resolved.error ?? REVIEW_COPY.mistakeTopic.noTopic);
+    }
+    const topic = resolved.topic;
+    const generatedCards = await generateAiFlashcardsForMistakeTopic(card, topic, settings, 5);
+    const cardsWithSource = generatedCards.map((item) => ({
+      ...item,
+      generatedFromFlow: "mistake-topic",
+      generatedFromCardId: card.id,
+      generatedTopic: topic
+    }));
+    let result;
+    try {
+      result = await this.store.appendCardsWithDedupe(cardsWithSource);
+    } catch (_error) {
+      throw new Error(REVIEW_COPY.mistakeTopic.writeFailed);
+    }
+    return {
+      topic,
+      addedCount: result.addedCount,
+      skippedCount: result.skippedCount
+    };
   }
 };
 
@@ -1136,6 +1645,9 @@ var NoteFlashcardsSettingTab = class extends import_obsidian3.PluginSettingTab {
         await updateSetting(this.plugin.settings, "generatorMode", value, async () => this.plugin.saveSettings());
       });
     });
+    new import_obsidian3.Setting(containerEl).setName(SETTINGS_COPY.mistakeTopicCardEntry.name).setDesc(SETTINGS_COPY.mistakeTopicCardEntry.description).addToggle((toggle) => toggle.setValue(this.plugin.settings.mistakeTopicCardEntryEnabled).onChange(async (value) => {
+      await updateSetting(this.plugin.settings, "mistakeTopicCardEntryEnabled", value, async () => this.plugin.saveSettings());
+    }));
     new import_obsidian3.Setting(containerEl).setName(SETTINGS_COPY.maxCardsPerNote.name).setDesc(SETTINGS_COPY.maxCardsPerNote.description).addText((text) => text.setPlaceholder(SETTINGS_COPY.maxCardsPerNote.placeholder).setValue(String(this.plugin.settings.maxCardsPerNote)).onChange(async (value) => {
       const parsed = parsePositiveInteger(value);
       if (parsed !== null) {
@@ -1419,116 +1931,6 @@ var NoteFlashcardsSettingTab = class extends import_obsidian3.PluginSettingTab {
 // src/reviewView.ts
 var import_obsidian4 = require("obsidian");
 
-// src/reviewCopy.ts
-var REVIEW_COPY = {
-  displayName: "Note Flashcards",
-  filters: {
-    source: "\u6765\u6E90",
-    all: "\u5168\u90E8",
-    current: "\u5F53\u524D\u7B14\u8BB0",
-    folder: "\u5F53\u524D\u6587\u4EF6\u5939",
-    mistakes: "\u9519\u9898\u672C"
-  },
-  buttons: {
-    refreshQueue: "\u5237\u65B0\u961F\u5217",
-    clearMasteredMistakes: "\u6E05\u7A7A\u5DF2\u638C\u63E1\u9519\u9898",
-    clearMasteredMistakesWithCount: (count) => `\u6E05\u7A7A\u5DF2\u638C\u63E1\u9519\u9898\uFF08${count}\uFF09`,
-    generateCurrentNote: "\u751F\u6210\u5F53\u524D\u7B14\u8BB0",
-    generateCurrentFolder: "\u751F\u6210\u5F53\u524D\u6587\u4EF6\u5939",
-    showAllNewCards: "\u67E5\u770B\u5168\u90E8\u65B0\u5361",
-    switchToMistakes: "\u5207\u5230\u9519\u9898\u672C",
-    flipToAnswer: "\u67E5\u770B\u7B54\u6848",
-    flipToQuestion: "\u56DE\u5230\u95EE\u9898",
-    openSource: "\u6253\u5F00\u539F\u6587",
-    addToMistakes: "\u52A0\u5165\u9519\u9898\u672C",
-    removeFromMistakes: "\u79FB\u51FA\u9519\u9898\u672C",
-    markMastered: "\u6807\u8BB0\u5DF2\u638C\u63E1",
-    unmarkMastered: "\u53D6\u6D88\u5DF2\u638C\u63E1",
-    previous: "\u4E0A\u4E00\u5F20",
-    next: "\u4E0B\u4E00\u5F20"
-  },
-  notices: {
-    noCurrentNote: "\u5F53\u524D\u6CA1\u6709\u53EF\u7528\u7684\u7B14\u8BB0",
-    cannotReadCurrentNote: "\u65E0\u6CD5\u8BFB\u53D6\u5F53\u524D\u7B14\u8BB0",
-    noCurrentFolder: "\u5F53\u524D\u6CA1\u6709\u53EF\u7528\u7684\u7236\u6587\u4EF6\u5939",
-    sourceNotFound: "\u627E\u4E0D\u5230\u539F\u6587\u7B14\u8BB0",
-    removedFromMistakes: "\u5DF2\u79FB\u51FA\u9519\u9898\u672C",
-    addedToMistakes: "\u5DF2\u52A0\u5165\u9519\u9898\u672C",
-    noMasteredMistakesToClear: "\u5F53\u524D\u6CA1\u6709\u5DF2\u638C\u63E1\u7684\u9519\u9898\u53EF\u6E05\u7406",
-    clearedMasteredMistakes: (count) => `\u5DF2\u6E05\u7406 ${count} \u5F20\u5DF2\u638C\u63E1\u9519\u9898`,
-    refreshed: "\u95EA\u5361\u5217\u8868\u5DF2\u5237\u65B0"
-  },
-  cardFace: {
-    question: "\u95EE\u9898",
-    answer: "\u7B54\u6848"
-  },
-  stats: {
-    queue: "\u5F53\u524D\u961F\u5217",
-    sourceTotal: "\u5F53\u524D\u6765\u6E90\u603B\u5361",
-    mistakeTotal: "\u9519\u9898\u672C\u603B\u6570",
-    priorityMistakes: "\u4F18\u5148\u9519\u9898",
-    masteredPendingClear: "\u5DF2\u638C\u63E1\u5F85\u6E05\u7406",
-    cardCount: (count) => `${count} \u5F20`
-  },
-  meta: {
-    shortcutHint: "\u7A7A\u683C\u7FFB\u9762 \xB7 \u2190 \u2192 \u5207\u6362",
-    dueCount: "\u5F85\u590D\u4E60",
-    queueCount: "\u5F53\u524D\u961F\u5217",
-    sourceCount: "\u5F53\u524D\u6765\u6E90",
-    mistakeCount: "\u9519\u9898\u672C",
-    inMistakeBook: "\u9519\u9898\u672C\u4E2D",
-    position: "\u7B2C",
-    summary: (dueCount, totalCount, totalCards, mistakeBookCount) => `${REVIEW_COPY.meta.dueCount} ${dueCount} \u5F20 \xB7 ${REVIEW_COPY.meta.queueCount} ${totalCount} \u5F20 \xB7 ${REVIEW_COPY.meta.sourceCount} ${totalCards} \u5F20 \xB7 ${REVIEW_COPY.meta.mistakeCount} ${mistakeBookCount} \u5F20`,
-    limitedNewCards: (totalNewCards, newCardLimit) => `\u5F53\u524D\u6765\u6E90\u5171\u6709 ${totalNewCards} \u5F20\u65B0\u5361\uFF0C\u6309\u6BCF\u65E5\u65B0\u5361\u4E0A\u9650\u4EC5\u5C55\u793A\u524D ${newCardLimit} \u5F20\u3002`,
-    positionLabel: (index, total) => `${REVIEW_COPY.meta.position} ${index} \u5F20 / \u5171 ${total} \u5F20`
-  },
-  emptyState: {
-    mistakesTitle: "\u9519\u9898\u672C\u76EE\u524D\u662F\u7A7A\u7684\u3002",
-    mistakesDescription: "\u4F60\u53EF\u4EE5\u5728\u5361\u7247\u64CD\u4F5C\u4E2D\u624B\u52A8\u52A0\u5165\u9519\u9898\u672C\u3002",
-    limitedTitle: "\u5F53\u524D\u4F18\u5148\u961F\u5217\u5DF2\u5B8C\u6210\uFF0C\u8FD8\u53EF\u4EE5\u7EE7\u7EED\u67E5\u770B\u5269\u4F59\u65B0\u5361\u3002",
-    noCardsTitle: "\u5F53\u524D\u6CA1\u6709\u53EF\u590D\u4E60\u7684\u5361\u7247\u3002",
-    noCardsDescription: "\u4F60\u53EF\u4EE5\u5148\u751F\u6210\u5F53\u524D\u7B14\u8BB0\u6216\u5F53\u524D\u6587\u4EF6\u5939\u7684\u95EA\u5361\u3002"
-  },
-  study: {
-    scopeLabel: "\u8303\u56F4",
-    countModeLabel: "\u6570\u91CF",
-    orderModeLabel: "\u987A\u5E8F",
-    onlyMistakesLabel: "\u53EA\u505A\u9519\u9898\u672C",
-    excludeMasteredLabel: "\u6392\u9664\u5DF2\u638C\u63E1",
-    scope: {
-      current: "\u5F53\u524D\u7B14\u8BB0",
-      folder: "\u5F53\u524D\u6587\u4EF6\u5939",
-      all: "\u5168\u90E8"
-    },
-    countMode: {
-      random10: "\u968F\u673A 10 \u9898",
-      all: "\u5168\u90E8"
-    },
-    orderMode: {
-      random: "\u968F\u673A",
-      sequential: "\u987A\u5E8F"
-    },
-    badges: {
-      mastered: "\u5DF2\u638C\u63E1",
-      mistake: "\u9519\u9898\u672C",
-      learning: "\u5B66\u4E60\u4E2D"
-    },
-    stats: {
-      mistakes: "\u9519\u9898\u672C",
-      mastered: "\u5DF2\u638C\u63E1",
-      learning: "\u5B66\u4E60\u4E2D"
-    },
-    emptyState: {
-      title: "\u5F53\u524D\u6761\u4EF6\u4E0B\u6CA1\u6709\u53EF\u5B66\u4E60\u7684\u5361\u7247\u3002",
-      description: "\u4F60\u53EF\u4EE5\u8C03\u6574\u7B5B\u9009\u6761\u4EF6\uFF0C\u6216\u5148\u751F\u6210\u5F53\u524D\u7B14\u8BB0/\u6587\u4EF6\u5939\u7684\u5361\u7247\u3002"
-    },
-    selectionSummary: (scope, countMode, orderMode, mistakesOnly, excludeMastered) => {
-      const filters = [mistakesOnly ? "\u53EA\u505A\u9519\u9898\u672C" : "", excludeMastered ? "\u6392\u9664\u5DF2\u638C\u63E1" : ""].filter(Boolean).join(" \xB7 ");
-      return [scope, countMode, orderMode, filters].filter(Boolean).join(" \xB7 ");
-    }
-  }
-};
-
 // src/reviewActions.ts
 async function generateForCurrentNoteAction(getCurrentPath, getFileByPath, generateForFile, reloadCards, notify) {
   const currentPath = getCurrentPath();
@@ -1578,6 +1980,17 @@ async function clearMasteredMistakeCardsAction(clearMasteredMistakeCards, reload
   }
   notify(REVIEW_COPY.notices.clearedMasteredMistakes(removedCount));
   await reloadCards();
+}
+async function generateByMistakeTopicAction(card, generateForMistakeTopic, reloadCards, notify, preferredIndex = 0) {
+  const result = await generateForMistakeTopic(card);
+  if (result.addedCount === 0) {
+    notify(REVIEW_COPY.notices.mistakeTopicAllDuplicated);
+  } else if (result.skippedCount > 0) {
+    notify(REVIEW_COPY.notices.mistakeTopicGeneratedPartial(result.addedCount, result.skippedCount));
+  } else {
+    notify(REVIEW_COPY.notices.mistakeTopicGenerated(result.addedCount));
+  }
+  await reloadCards(card.id, preferredIndex);
 }
 
 // src/reviewState.ts
@@ -1700,6 +2113,10 @@ var ReviewView = class _ReviewView extends import_obsidian4.ItemView {
     this.selectedCount = 0;
     this.sessionCardIds = [];
     this.lastSessionKey = "";
+    this.mistakeTopicKey = "";
+    this.mistakeTopicResolution = null;
+    this.mistakeTopicLoading = false;
+    this.isGeneratingMistakeTopic = false;
     this.handleKeydown = (event) => {
       if (!this.isViewActive() || this.shouldIgnoreKeyboardEvent(event)) {
         return;
@@ -1872,6 +2289,92 @@ var ReviewView = class _ReviewView extends import_obsidian4.ItemView {
       (message) => new import_obsidian4.Notice(message)
     );
   }
+  hashFingerprint(input) {
+    let hash = 2166136261;
+    for (let index = 0; index < input.length; index += 1) {
+      hash ^= input.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(16);
+  }
+  getActiveModelFingerprint(settings) {
+    const activeConfig = settings.aiModelConfigs.find((config) => config.id === settings.activeAiModelId);
+    if (!activeConfig) {
+      return "no-active-model";
+    }
+    return this.hashFingerprint([
+      activeConfig.provider,
+      activeConfig.apiUrl,
+      activeConfig.model,
+      activeConfig.prompt,
+      activeConfig.apiKey
+    ].join("::"));
+  }
+  getMistakeTopicKey(card) {
+    const settings = this.generationService.getSettingsSnapshot();
+    return [
+      card.id,
+      settings.generatorMode,
+      settings.activeAiModelId,
+      settings.aiModelConfigs.length,
+      this.getActiveModelFingerprint(settings)
+    ].join("::");
+  }
+  ensureMistakeTopicResolution(card) {
+    const key = this.getMistakeTopicKey(card);
+    if (this.mistakeTopicKey === key && (this.mistakeTopicLoading || this.mistakeTopicResolution)) {
+      return;
+    }
+    this.mistakeTopicKey = key;
+    this.mistakeTopicLoading = true;
+    this.mistakeTopicResolution = null;
+    void this.resolveMistakeTopic(card, key);
+  }
+  async resolveMistakeTopic(card, key) {
+    try {
+      const resolution = await this.generationService.resolveMistakeTopicForCard(card);
+      if (this.mistakeTopicKey !== key) {
+        return;
+      }
+      this.mistakeTopicResolution = resolution;
+    } catch (error) {
+      if (this.mistakeTopicKey !== key) {
+        return;
+      }
+      this.mistakeTopicResolution = {
+        topic: null,
+        source: null,
+        error: error instanceof Error ? error.message : REVIEW_COPY.mistakeTopic.noTopic
+      };
+    } finally {
+      if (this.mistakeTopicKey === key) {
+        this.mistakeTopicLoading = false;
+      }
+      this.render();
+    }
+  }
+  async generateByMistakeTopic(card) {
+    if (this.isGeneratingMistakeTopic) {
+      return;
+    }
+    this.isGeneratingMistakeTopic = true;
+    this.render();
+    try {
+      await generateByMistakeTopicAction(
+        card,
+        (targetCard) => this.generationService.generateForMistakeTopic(targetCard),
+        (preferredCardId, preferredIndex) => this.reloadCards(preferredCardId, preferredIndex),
+        (message) => new import_obsidian4.Notice(message),
+        this.index
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : REVIEW_COPY.mistakeTopic.noTopic;
+      new import_obsidian4.Notice(message);
+    } finally {
+      this.isGeneratingMistakeTopic = false;
+      this.render();
+    }
+  }
   getDisplayState() {
     return getStudyDisplayState({
       cards: this.cards,
@@ -1957,6 +2460,41 @@ var ReviewView = class _ReviewView extends import_obsidian4.ItemView {
     cardEl.createDiv({ cls: "note-flashcards-card-content", text: cardView.content });
     contentEl.createDiv({ cls: "note-flashcards-meta", text: cardView.meta });
   }
+  renderMistakeTopicSection(contentEl, card) {
+    const settings = this.generationService.getSettingsSnapshot();
+    if (!settings.mistakeTopicCardEntryEnabled || !card.inMistakeBook) {
+      return;
+    }
+    this.ensureMistakeTopicResolution(card);
+    const section = contentEl.createDiv({ cls: "note-flashcards-mistake-topic" });
+    section.createDiv({ cls: "note-flashcards-mistake-topic-title", text: REVIEW_COPY.mistakeTopic.title });
+    if (this.mistakeTopicLoading) {
+      section.createDiv({ cls: "note-flashcards-mistake-topic-meta", text: REVIEW_COPY.mistakeTopic.loading });
+      return;
+    }
+    const topic = this.mistakeTopicResolution?.topic;
+    if (topic) {
+      section.createDiv({ cls: "note-flashcards-mistake-topic-topic", text: `${REVIEW_COPY.mistakeTopic.topicLabel}\uFF1A${topic}` });
+    } else {
+      section.createDiv({
+        cls: "note-flashcards-mistake-topic-meta",
+        text: this.mistakeTopicResolution?.error ?? REVIEW_COPY.mistakeTopic.noTopic
+      });
+    }
+    if (settings.generatorMode === "rule") {
+      section.createDiv({ cls: "note-flashcards-mistake-topic-meta", text: REVIEW_COPY.mistakeTopic.aiRequired });
+      return;
+    }
+    if (!topic) {
+      return;
+    }
+    const actions = section.createDiv({ cls: "note-flashcards-mistake-topic-actions" });
+    const button = new import_obsidian4.ButtonComponent(actions).setButtonText(this.isGeneratingMistakeTopic ? REVIEW_COPY.mistakeTopic.generatingButton : REVIEW_COPY.mistakeTopic.generateButton).onClick(async () => await this.generateByMistakeTopic(card));
+    button.buttonEl.addClass("mod-cta");
+    if (this.isGeneratingMistakeTopic) {
+      button.buttonEl.addClass("is-disabled");
+    }
+  }
   renderActions(contentEl, card, cardView) {
     const actions = contentEl.createDiv({ cls: "note-flashcards-actions" });
     new import_obsidian4.ButtonComponent(actions).setButtonText(cardView.flipButtonLabel).onClick(() => this.toggleCardFace()).buttonEl.addClass("mod-cta");
@@ -1986,6 +2524,7 @@ var ReviewView = class _ReviewView extends import_obsidian4.ItemView {
     }
     const card = this.cards[this.index];
     this.renderCard(contentEl, display.currentCard);
+    this.renderMistakeTopicSection(contentEl, card);
     this.renderActions(contentEl, card, display.currentCard);
     this.renderNavigation(contentEl, display);
   }
@@ -2049,6 +2588,7 @@ function loadPersistedSettings(data) {
     generatorMode: rawSettings.generatorMode ?? DEFAULT_SETTINGS.generatorMode,
     maxCardsPerNote: rawSettings.maxCardsPerNote ?? DEFAULT_SETTINGS.maxCardsPerNote,
     summaryLength: rawSettings.summaryLength ?? DEFAULT_SETTINGS.summaryLength,
+    mistakeTopicCardEntryEnabled: typeof rawSettings.mistakeTopicCardEntryEnabled === "boolean" ? rawSettings.mistakeTopicCardEntryEnabled : DEFAULT_SETTINGS.mistakeTopicCardEntryEnabled,
     aiModelConfigs,
     activeAiModelId: aiModelConfigs.some((config) => config.id === activeAiModelId) ? activeAiModelId : "",
     aiSectionCollapsed: typeof rawSettings.aiSectionCollapsed === "boolean" ? rawSettings.aiSectionCollapsed : DEFAULT_SETTINGS.aiSectionCollapsed,

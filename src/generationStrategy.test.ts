@@ -17,6 +17,7 @@ function createSettings(overrides: Partial<NoteFlashcardsSettings> = {}): NoteFl
     generatorMode: "rule",
     maxCardsPerNote: 10,
     summaryLength: 100,
+    mistakeTopicCardEntryEnabled: true,
     aiModelConfigs: [],
     activeAiModelId: "",
     aiSectionCollapsed: true,

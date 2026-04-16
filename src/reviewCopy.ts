@@ -34,7 +34,10 @@ export const REVIEW_COPY = {
     addedToMistakes: "已加入错题本",
     noMasteredMistakesToClear: "当前没有已掌握的错题可清理",
     clearedMasteredMistakes: (count: number) => `已清理 ${count} 张已掌握错题`,
-    refreshed: "闪卡列表已刷新"
+    refreshed: "闪卡列表已刷新",
+    mistakeTopicGenerated: (count: number) => `已新增 ${count} 张与当前错题主题相关的学习卡片。`,
+    mistakeTopicGeneratedPartial: (addedCount: number, skippedCount: number) => `已新增 ${addedCount} 张卡片，跳过 ${skippedCount} 张重复卡片。`,
+    mistakeTopicAllDuplicated: "当前主题相关卡片已存在，本次未新增卡片。"
   },
   cardFace: {
     question: "问题",
@@ -104,5 +107,17 @@ export const REVIEW_COPY = {
       const filters = [mistakesOnly ? "只做错题本" : "", excludeMastered ? "排除已掌握" : ""].filter(Boolean).join(" · ");
       return [scope, countMode, orderMode, filters].filter(Boolean).join(" · ");
     }
+  },
+  mistakeTopic: {
+    title: "错题主题卡片区块",
+    topicLabel: "当前主题",
+    loading: "正在识别当前错题主题...",
+    generateButton: "按错题主题生成学习卡片",
+    generatingButton: "生成中...",
+    noTopic: "当前错题暂未识别到可用主题。",
+    nonMistake: "当前卡片不在错题本中，无法触发该能力。",
+    aiRequired: "该能力需要可用的 AI 生成能力，请切换到 AI 或混合模式。",
+    noAiModel: "当前未配置可用 AI 模型，暂时无法按错题主题生成卡片。",
+    writeFailed: "卡片已生成，但写入本地卡片库失败，请稍后重试。"
   }
 } as const;

@@ -21,6 +21,13 @@ function hasPrefixPath(path: string, prefix: string): boolean {
   return path.startsWith(normalizePrefix(prefix));
 }
 
+function normalizeDedupText(input: string): string {
+  return input
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export class CardStore {
   constructor(private readonly loadData: () => Promise<unknown>, private readonly saveData: (data: PersistedData) => Promise<void>) {}
 
@@ -55,6 +62,39 @@ export class CardStore {
     const retained = data.cards.filter((card) => card.sourcePath !== sourcePath);
     await this.saveData({ ...data, cards: [...retained, ...newCards] });
     return newCards.length;
+  }
+
+  async appendCardsWithDedupe(newCards: Flashcard[]): Promise<{ addedCount: number; skippedCount: number }> {
+    if (newCards.length === 0) {
+      return { addedCount: 0, skippedCount: 0 };
+    }
+
+    const data = await this.getData();
+    const questionSignatures = new Set(data.cards.map((card) => normalizeDedupText(card.question)));
+    const qaSignatures = new Set(data.cards.map((card) => `${normalizeDedupText(card.question)}::${normalizeDedupText(card.answer)}`));
+
+    const appendableCards: Flashcard[] = [];
+    let skippedCount = 0;
+    for (const card of newCards) {
+      const questionSignature = normalizeDedupText(card.question);
+      const qaSignature = `${questionSignature}::${normalizeDedupText(card.answer)}`;
+      if (questionSignatures.has(questionSignature) || qaSignatures.has(qaSignature)) {
+        skippedCount += 1;
+        continue;
+      }
+      questionSignatures.add(questionSignature);
+      qaSignatures.add(qaSignature);
+      appendableCards.push(card);
+    }
+
+    if (appendableCards.length > 0) {
+      await this.saveData({ ...data, cards: [...data.cards, ...appendableCards] });
+    }
+
+    return {
+      addedCount: appendableCards.length,
+      skippedCount
+    };
   }
 
   async getCardsByPrefix(prefix: string): Promise<Flashcard[]> {

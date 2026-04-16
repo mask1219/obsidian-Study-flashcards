@@ -49,6 +49,13 @@ describe("pluginSettingsState", () => {
     });
   });
 
+  it("loads mistake-topic entry toggle from persisted settings", () => {
+    expect(loadPersistedSettings({ settings: { mistakeTopicCardEntryEnabled: false } })).toEqual({
+      ...DEFAULT_SETTINGS,
+      mistakeTopicCardEntryEnabled: false
+    });
+  });
+
   it("ignores legacy single-model fields and keeps new model list empty", () => {
     expect(loadPersistedSettings({
       settings: {

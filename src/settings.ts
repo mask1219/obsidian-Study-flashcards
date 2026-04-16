@@ -4,6 +4,7 @@ export const DEFAULT_SETTINGS: NoteFlashcardsSettings = {
   generatorMode: "rule",
   maxCardsPerNote: 12,
   summaryLength: 220,
+  mistakeTopicCardEntryEnabled: true,
   aiModelConfigs: [],
   activeAiModelId: "",
   aiSectionCollapsed: true,

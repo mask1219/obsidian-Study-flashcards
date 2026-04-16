@@ -43,7 +43,23 @@ function createView(overrides: {
 } = {}) {
   const generationService = {
     getStudySession: vi.fn(overrides.getStudySession ?? (async () => createSession())),
-    getFileByPath: vi.fn()
+    getFileByPath: vi.fn(),
+    getSettingsSnapshot: vi.fn(() => ({
+      generatorMode: "ai",
+      mistakeTopicCardEntryEnabled: true,
+      activeAiModelId: "model-1",
+      aiModelConfigs: [{
+        id: "model-1",
+        name: "默认模型",
+        provider: "openai-compatible",
+        apiUrl: "https://api.openai.com/v1/chat/completions",
+        apiKey: "sk-test",
+        model: "gpt-4o-mini",
+        prompt: ""
+      }]
+    })),
+    resolveMistakeTopicForCard: vi.fn(async () => ({ topic: "哈希表", source: "sourceHeading" })),
+    generateForMistakeTopic: vi.fn(async () => ({ addedCount: 1, skippedCount: 0 }))
   };
   const cardStore = {
     setMistakeBook: vi.fn(async () => undefined),
@@ -358,5 +374,44 @@ describe("ReviewView", () => {
     (leaf.view as any).editor.setCursor.mockClear();
     await viewAny.openSourceNote(createCard({ sourceAnchorText: undefined, sourceStartLine: undefined }));
     expect((leaf.view as any).editor.setCursor).not.toHaveBeenCalled();
+  });
+
+  it("generates by mistake topic and keeps current card position", async () => {
+    const { viewAny, generationService } = createView();
+    const card = createCard({ id: "mistake-2", inMistakeBook: true });
+    const reloadCards = vi.fn(async () => undefined);
+    viewAny.reloadCards = reloadCards;
+    viewAny.index = 5;
+
+    await viewAny.generateByMistakeTopic(card);
+
+    expect(generationService.generateForMistakeTopic).toHaveBeenCalledWith(card);
+    expect(reloadCards).toHaveBeenCalledWith("mistake-2", 5);
+  });
+
+  it("re-resolves topic when active model config changes for the same card", () => {
+    const { viewAny, generationService } = createView();
+    const card = createCard({ id: "mistake-2", inMistakeBook: true });
+    generationService.getSettingsSnapshot
+      .mockReturnValueOnce({
+        generatorMode: "ai",
+        mistakeTopicCardEntryEnabled: true,
+        activeAiModelId: "model-1",
+        aiModelConfigs: [{ id: "model-1", name: "模型A", provider: "openai-compatible", apiUrl: "https://a", model: "m", prompt: "p1", apiKey: "k1" }]
+      })
+      .mockReturnValue({
+        generatorMode: "ai",
+        mistakeTopicCardEntryEnabled: true,
+        activeAiModelId: "model-1",
+        aiModelConfigs: [{ id: "model-1", name: "模型A", provider: "openai-compatible", apiUrl: "https://a", model: "m", prompt: "p2", apiKey: "k2" }]
+      });
+
+    viewAny.mistakeTopicResolution = { topic: "旧主题", source: "question" };
+    viewAny.mistakeTopicLoading = false;
+    viewAny.mistakeTopicKey = viewAny.getMistakeTopicKey(card);
+
+    viewAny.ensureMistakeTopicResolution(card);
+
+    expect(generationService.resolveMistakeTopicForCard).toHaveBeenCalledWith(card);
   });
 });

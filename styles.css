@@ -146,6 +146,7 @@
 
 .note-flashcards-empty-actions,
 .note-flashcards-actions,
+.note-flashcards-mistake-topic-actions,
 .note-flashcards-ratings,
 .note-flashcards-nav {
   padding: 12px;
@@ -159,6 +160,37 @@
   gap: 8px;
   flex-wrap: wrap;
   margin-top: 12px;
+}
+
+.note-flashcards-mistake-topic {
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--color-orange) 30%, var(--background-modifier-border));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--color-orange) 10%, var(--background-secondary));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.note-flashcards-mistake-topic-title {
+  font-weight: 700;
+}
+
+.note-flashcards-mistake-topic-topic {
+  color: var(--text-normal);
+}
+
+.note-flashcards-mistake-topic-meta {
+  color: var(--text-muted);
+}
+
+.note-flashcards-mistake-topic-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
 }
 
 .note-flashcards-ratings,

@@ -11,13 +11,36 @@ const REQUIRED_FIELD_LABELS = {
   model: "模型名"
 } as const;
 
+const ALLOWED_MODEL_PLACEHOLDER = "{model}";
+const URL_PLACEHOLDER_PATTERN = /\{[^}]+\}/g;
+
 export const AI_MODEL_ERRORS = {
   noConfigs: "未配置任何 AI 模型，请先新增模型配置。",
   noActiveModel: "未选择当前生效模型，请先在设置页选择。",
   activeModelNotFound: "当前生效模型不存在，请重新选择。",
   unsupportedProvider: "Provider 不支持，请检查模型配置。",
-  missingFields: (fields: string[]) => `模型配置缺少必填项：${fields.join("、")}`
+  missingFields: (fields: string[]) => `模型配置缺少必填项：${fields.join("、")}`,
+  invalidApiUrl: "API URL 格式无效，请填写完整的 http(s) 地址。",
+  invalidApiProtocol: "API URL 仅支持 http(s) 协议。",
+  unresolvedUrlPlaceholders: (tokens: string[]) => `API URL 存在未替换占位符：${tokens.join("、")}，请填写真实地址。`
 } as const;
+
+function getAllowedUrlPlaceholders(provider: AiProvider): Set<string> {
+  if (provider === "azure-openai" || provider === "gemini") {
+    return new Set([ALLOWED_MODEL_PLACEHOLDER]);
+  }
+  return new Set();
+}
+
+function getUnresolvedUrlPlaceholders(apiUrl: string, provider: AiProvider): string[] {
+  const matched = apiUrl.match(URL_PLACEHOLDER_PATTERN);
+  if (!matched) {
+    return [];
+  }
+  const allowed = getAllowedUrlPlaceholders(provider);
+  const unresolved = matched.filter((token) => !allowed.has(token));
+  return Array.from(new Set(unresolved));
+}
 
 export function createAiModelId(): string {
   return `model-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -102,6 +125,22 @@ export function validateModelConfigForRequest(config: AiModelConfig): string | n
   if (!isSupportedProvider(config.provider)) {
     return AI_MODEL_ERRORS.unsupportedProvider;
   }
+
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(config.apiUrl.trim());
+  } catch (_error) {
+    return AI_MODEL_ERRORS.invalidApiUrl;
+  }
+  if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+    return AI_MODEL_ERRORS.invalidApiProtocol;
+  }
+
+  const unresolvedPlaceholders = getUnresolvedUrlPlaceholders(config.apiUrl.trim(), config.provider);
+  if (unresolvedPlaceholders.length > 0) {
+    return AI_MODEL_ERRORS.unresolvedUrlPlaceholders(unresolvedPlaceholders);
+  }
+
   return null;
 }
 

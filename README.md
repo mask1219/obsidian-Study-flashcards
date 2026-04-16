@@ -87,7 +87,7 @@ npm run build
 ### 4. AI 模式配置说明
 
 - 当前 AI 模式支持五类 Provider：
-  - OpenAI 兼容（`/v1/chat/completions`）
+  - OpenAI 兼容（支持 `/v1/chat/completions` 与 `/v1/responses`）
   - OpenRouter（`https://openrouter.ai/api/v1/chat/completions`）
   - Azure OpenAI（`.../openai/deployments/{model}/chat/completions?...`）
   - Anthropic（`/v1/messages`）

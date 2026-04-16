@@ -18,6 +18,10 @@ export const SETTINGS_COPY = {
       hybrid: "混合"
     }
   },
+  mistakeTopicCardEntry: {
+    name: "错题主题定向生成入口",
+    description: "在复习错题时显示“按错题主题生成学习卡片”区块"
+  },
   maxCardsPerNote: {
     name: "每篇笔记最大卡片数",
     description: "限制单篇笔记生成的闪卡数量",
@@ -51,7 +55,7 @@ export const SETTINGS_COPY = {
   },
   aiApiUrl: {
     name: "AI 接口地址",
-    description: "可自定义完整接口地址；Gemini 支持使用 {model} 占位符",
+    description: "可自定义完整接口地址；Gemini/Azure 支持 {model} 占位符，Azure 需将 {resource} 替换为真实资源名",
     placeholder: "https://api.openai.com/v1/chat/completions"
   },
   aiApiKey: {

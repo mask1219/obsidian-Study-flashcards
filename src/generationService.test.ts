@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { GenerationService } from "./generationService";
+import { REVIEW_COPY } from "./reviewCopy";
 import type { Flashcard, NoteFlashcardsSettings, ParsedSection } from "./types";
 
 vi.mock("./noteParser", () => ({
@@ -36,10 +37,16 @@ vi.mock("./generationStrategy", async (importOriginal) => {
   };
 });
 
+vi.mock("./aiGenerator", () => ({
+  generateAiTopicFromCard: vi.fn(async () => "哈希表"),
+  generateAiFlashcardsForMistakeTopic: vi.fn(async () => [])
+}));
+
 const SETTINGS: NoteFlashcardsSettings = {
   generatorMode: "rule",
   maxCardsPerNote: 10,
   summaryLength: 120,
+  mistakeTopicCardEntryEnabled: true,
   aiModelConfigs: [],
   activeAiModelId: "",
   aiSectionCollapsed: true,
@@ -80,13 +87,15 @@ function createCard(overrides: Partial<Flashcard> = {}): Flashcard {
 
 function createService(cards: Flashcard[], settings: NoteFlashcardsSettings = SETTINGS, overrides: {
   replaceCardsForSource?: (sourcePath: string, newCards: Flashcard[]) => Promise<number>;
+  appendCardsWithDedupe?: (newCards: Flashcard[]) => Promise<{ addedCount: number; skippedCount: number }>;
   cachedRead?: (file: { path: string }) => Promise<string>;
   getMarkdownFiles?: () => Array<{ path: string; basename: string }>;
   getAbstractFileByPath?: (path: string) => unknown;
 } = {}): GenerationService {
   const store = {
     getCards: async () => cards,
-    replaceCardsForSource: overrides.replaceCardsForSource ?? (async () => 0)
+    replaceCardsForSource: overrides.replaceCardsForSource ?? (async () => 0),
+    appendCardsWithDedupe: overrides.appendCardsWithDedupe ?? (async () => ({ addedCount: 0, skippedCount: 0 }))
   } as never;
   const vault = {
     getAbstractFileByPath: overrides.getAbstractFileByPath ?? (() => null),
@@ -137,7 +146,33 @@ describe("GenerationService", () => {
     );
   });
 
-  it("limits due new cards by daily setting while keeping due review cards", async () => {
+  it("limits due new cards by daily setting in random10 mode while keeping due review cards", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-12T08:00:00.000Z"));
+
+    const service = createService([
+      createCard({ id: "due-review", cardState: "review", dueAt: "2026-04-12T07:00:00.000Z", sourcePath: "folder/a.md", sourceStartLine: 1 }),
+      createCard({ id: "new-early", cardState: "new", createdAt: "2026-04-10T00:00:00.000Z", dueAt: "2026-04-12T06:00:00.000Z", sourcePath: "folder/a.md", sourceStartLine: 2 }),
+      createCard({ id: "new-late", cardState: "new", createdAt: "2026-04-11T00:00:00.000Z", dueAt: "2026-04-12T06:10:00.000Z", sourcePath: "folder/a.md", sourceStartLine: 3 }),
+      createCard({ id: "future-review", cardState: "review", dueAt: "2026-04-13T08:00:00.000Z", sourcePath: "folder/a.md", sourceStartLine: 4 })
+    ], { ...SETTINGS, newCardsPerDay: 1, showAllCardsInReview: false });
+
+    const session = await service.getStudySession({
+      scope: "all",
+      countMode: "random10",
+      orderMode: "sequential",
+      includeMistakeBookOnly: false,
+      excludeMastered: false
+    });
+
+    expect(session.cards.map((card) => card.id)).toEqual(["due-review", "new-early"]);
+    expect(session.totalCards).toBe(2);
+    expect(session.selectedCount).toBe(2);
+
+    vi.useRealTimers();
+  });
+
+  it("does not limit due new cards by daily setting in all mode", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-12T08:00:00.000Z"));
 
@@ -156,9 +191,9 @@ describe("GenerationService", () => {
       excludeMastered: false
     });
 
-    expect(session.cards.map((card) => card.id)).toEqual(["due-review", "new-early"]);
-    expect(session.totalCards).toBe(2);
-    expect(session.selectedCount).toBe(2);
+    expect(session.cards.map((card) => card.id)).toEqual(["due-review", "new-early", "new-late"]);
+    expect(session.totalCards).toBe(3);
+    expect(session.selectedCount).toBe(3);
 
     vi.useRealTimers();
   });
@@ -250,5 +285,73 @@ describe("GenerationService", () => {
 
     expect(session.cards.map((card) => card.id)).toEqual(["card-3", "card-1"]);
     expect(session.sessionCardIds).toEqual(["card-3", "card-1"]);
+  });
+
+  it("resolves mistake topic from local heading first", async () => {
+    const service = createService([], { ...SETTINGS, generatorMode: "ai" });
+    const result = await service.resolveMistakeTopicForCard(createCard({
+      inMistakeBook: true,
+      sourceHeading: "二分查找",
+      sourceAnchorText: "查找边界",
+      question: "哈希表是什么？"
+    }));
+
+    expect(result.topic).toBe("二分查找");
+    expect(result.source).toBe("sourceHeading");
+  });
+
+  it("generates cards by mistake topic and writes source metadata", async () => {
+    const aiGenerator = await import("./aiGenerator");
+    vi.mocked(aiGenerator.generateAiFlashcardsForMistakeTopic).mockResolvedValueOnce([
+      createCard({ id: "new-1", question: "Q1", answer: "A1" }),
+      createCard({ id: "new-2", question: "Q2", answer: "A2" })
+    ]);
+
+    const appendCardsWithDedupe = vi.fn(async (_cards: Flashcard[]) => ({ addedCount: 1, skippedCount: 1 }));
+    const service = createService([], { ...SETTINGS, generatorMode: "ai" }, { appendCardsWithDedupe });
+    const baseCard = createCard({
+      id: "mistake-1",
+      inMistakeBook: true,
+      sourceHeading: "二分查找"
+    });
+
+    const result = await service.generateForMistakeTopic(baseCard);
+
+    expect(result).toEqual({
+      topic: "二分查找",
+      addedCount: 1,
+      skippedCount: 1
+    });
+    expect(appendCardsWithDedupe).toHaveBeenCalledWith(expect.arrayContaining([
+      expect.objectContaining({
+        generatedFromFlow: "mistake-topic",
+        generatedFromCardId: "mistake-1",
+        generatedTopic: "二分查找"
+      })
+    ]));
+  });
+
+  it("blocks mistake-topic generation in rule mode", async () => {
+    const service = createService([], { ...SETTINGS, generatorMode: "rule" });
+    await expect(service.generateForMistakeTopic(createCard({ inMistakeBook: true }))).rejects.toThrow(REVIEW_COPY.mistakeTopic.aiRequired);
+  });
+
+  it("surfaces write failure as a clear Chinese message", async () => {
+    const aiGenerator = await import("./aiGenerator");
+    vi.mocked(aiGenerator.generateAiFlashcardsForMistakeTopic).mockResolvedValueOnce([
+      createCard({ id: "new-1", question: "Q1", answer: "A1" })
+    ]);
+
+    const service = createService([], { ...SETTINGS, generatorMode: "ai" }, {
+      appendCardsWithDedupe: async () => {
+        throw new Error("disk fail");
+      }
+    });
+
+    await expect(service.generateForMistakeTopic(createCard({
+      id: "mistake-1",
+      inMistakeBook: true,
+      sourceHeading: "二分查找"
+    }))).rejects.toThrow(REVIEW_COPY.mistakeTopic.writeFailed);
   });
 });

@@ -30,6 +30,9 @@ export interface Flashcard {
   isMastered: boolean;
   mistakeSuccessStreak: number;
   lastReviewedAt?: string;
+  generatedFromFlow?: "mistake-topic";
+  generatedFromCardId?: string;
+  generatedTopic?: string;
 }
 
 export interface ParsedSection {
@@ -46,6 +49,7 @@ export interface NoteFlashcardsSettings {
   generatorMode: GeneratorMode;
   maxCardsPerNote: number;
   summaryLength: number;
+  mistakeTopicCardEntryEnabled: boolean;
   aiModelConfigs: AiModelConfig[];
   activeAiModelId: string;
   aiSectionCollapsed: boolean;

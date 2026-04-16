@@ -1,9 +1,9 @@
 import * as obsidian from "obsidian";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AI_MODEL_ERRORS } from "./aiModelState";
-import { generateAiFlashcards, testAiConnection } from "./aiGenerator";
+import { generateAiFlashcards, generateAiFlashcardsForMistakeTopic, generateAiTopicFromCard, testAiConnection } from "./aiGenerator";
 import { GENERATION_COPY } from "./generationStrategy";
-import type { AiModelConfig, NoteFlashcardsSettings, ParsedSection } from "./types";
+import type { AiModelConfig, Flashcard, NoteFlashcardsSettings, ParsedSection } from "./types";
 
 const SECTIONS: ParsedSection[] = [
   {
@@ -43,6 +43,7 @@ function createSettings(overrides: Partial<NoteFlashcardsSettings> = {}, modelOv
     generatorMode: "ai",
     maxCardsPerNote: 5,
     summaryLength: 20,
+    mistakeTopicCardEntryEnabled: true,
     aiModelConfigs: [model],
     activeAiModelId: model.id,
     aiSectionCollapsed: true,
@@ -52,6 +53,31 @@ function createSettings(overrides: Partial<NoteFlashcardsSettings> = {}, modelOv
     learningStepsMinutes: [1, 10],
     graduatingIntervalDays: 1,
     easyIntervalDays: 4,
+    ...overrides
+  };
+}
+
+function createMistakeCard(overrides: Partial<Flashcard> = {}): Flashcard {
+  return {
+    id: "mistake-1",
+    question: "哈希表如何处理冲突？",
+    answer: "常见方法有链地址法和开放寻址。",
+    sourcePath: "algo.md",
+    sourceHeading: "哈希表",
+    sourceAnchorText: "冲突处理",
+    generatorType: "rule",
+    createdAt: "2026-04-10T00:00:00.000Z",
+    dueAt: "2026-04-10T00:00:00.000Z",
+    intervalDays: 0,
+    easeFactor: 2.5,
+    repetition: 0,
+    lapseCount: 0,
+    reviewCount: 0,
+    cardState: "new",
+    learningStep: 0,
+    inMistakeBook: true,
+    isMastered: false,
+    mistakeSuccessStreak: 0,
     ...overrides
   };
 }
@@ -111,6 +137,50 @@ describe("generateAiFlashcards", () => {
       question: "什么是牛顿第一定律？",
       generatorType: "ai",
       sourcePath: "physics.md",
+      sourceHeading: "牛顿第一定律"
+    });
+  });
+
+  it("supports OpenAI-compatible /responses endpoint request and response format", async () => {
+    const requestUrlMock = vi.spyOn(obsidian, "requestUrl");
+    requestUrlMock.mockResolvedValueOnce({
+      status: 200,
+      headers: {},
+      arrayBuffer: new ArrayBuffer(0),
+      text: "",
+      json: {
+        output: [
+          {
+            type: "message",
+            content: [
+              {
+                type: "output_text",
+                text: "{\"cards\":[{\"sectionIndex\":0,\"question\":\"Responses题目\",\"answer\":\"Responses答案\"}]}"
+              }
+            ]
+          }
+        ]
+      }
+    });
+
+    const cards = await generateAiFlashcards(SECTIONS, createSettings({}, {
+      apiUrl: "https://api.openai.com/v1/responses",
+      model: "gpt-5.4"
+    }));
+
+    expect(requestUrlMock).toHaveBeenCalledWith(expect.objectContaining({
+      url: "https://api.openai.com/v1/responses",
+      method: "POST"
+    }));
+    const requestPayload = JSON.parse(((requestUrlMock.mock.calls[0]?.[0] as { body?: string })?.body) ?? "{}") as {
+      input?: unknown;
+      messages?: unknown;
+    };
+    expect(Array.isArray(requestPayload.input)).toBe(true);
+    expect(requestPayload.messages).toBeUndefined();
+    expect(cards[0]).toMatchObject({
+      question: "Responses题目",
+      answer: "Responses答案",
       sourceHeading: "牛顿第一定律"
     });
   });
@@ -374,6 +444,23 @@ describe("generateAiFlashcards", () => {
     await expect(testAiConnection(createModelConfig())).resolves.toBeUndefined();
   });
 
+  it("tests /responses provider connection successfully", async () => {
+    vi.spyOn(obsidian, "requestUrl").mockResolvedValueOnce({
+      status: 200,
+      headers: {},
+      arrayBuffer: new ArrayBuffer(0),
+      text: "",
+      json: {
+        output_text: "ok"
+      }
+    });
+
+    await expect(testAiConnection(createModelConfig({
+      apiUrl: "https://api.openai.com/v1/responses",
+      model: "gpt-5.4"
+    }))).resolves.toBeUndefined();
+  });
+
   it("fails provider connection when response has no content", async () => {
     vi.spyOn(obsidian, "requestUrl").mockResolvedValueOnce({
       status: 200,
@@ -386,5 +473,73 @@ describe("generateAiFlashcards", () => {
     });
 
     await expect(testAiConnection(createModelConfig())).rejects.toThrow(GENERATION_COPY.errors.aiInvalidResponse);
+  });
+
+  it("extracts a topic from AI response for mistake-topic fallback", async () => {
+    vi.spyOn(obsidian, "requestUrl").mockResolvedValueOnce({
+      status: 200,
+      headers: {},
+      arrayBuffer: new ArrayBuffer(0),
+      text: "",
+      json: {
+        choices: [
+          {
+            message: {
+              content: "{\"topic\":\"动态规划\"}"
+            }
+          }
+        ]
+      }
+    });
+
+    await expect(generateAiTopicFromCard(createMistakeCard(), createSettings())).resolves.toBe("动态规划");
+  });
+
+  it("generates mistake-topic flashcards with fixed count target", async () => {
+    vi.spyOn(obsidian, "requestUrl").mockResolvedValueOnce({
+      status: 200,
+      headers: {},
+      arrayBuffer: new ArrayBuffer(0),
+      text: "",
+      json: {
+        choices: [
+          {
+            message: {
+              content: "{\"cards\":[{\"question\":\"Q1\",\"answer\":\"A1\"},{\"question\":\"Q2\",\"answer\":\"A2\"}]}"
+            }
+          }
+        ]
+      }
+    });
+
+    const cards = await generateAiFlashcardsForMistakeTopic(createMistakeCard({ sourceHeading: "" }), "哈希表专题", createSettings(), 2);
+    expect(cards).toHaveLength(2);
+    expect(cards[0]).toMatchObject({
+      question: "Q1",
+      answer: "A1",
+      sourcePath: "algo.md",
+      sourceHeading: "哈希表专题",
+      generatorType: "ai"
+    });
+  });
+
+  it("throws when mistake-topic card count is less than target", async () => {
+    vi.spyOn(obsidian, "requestUrl").mockResolvedValueOnce({
+      status: 200,
+      headers: {},
+      arrayBuffer: new ArrayBuffer(0),
+      text: "",
+      json: {
+        choices: [
+          {
+            message: {
+              content: "{\"cards\":[{\"question\":\"Q1\",\"answer\":\"A1\"},{\"question\":\"Q2\",\"answer\":\"A2\"}]}"
+            }
+          }
+        ]
+      }
+    });
+
+    await expect(generateAiFlashcardsForMistakeTopic(createMistakeCard(), "哈希表", createSettings(), 5)).rejects.toThrow("AI 返回卡片数量不足");
   });
 });

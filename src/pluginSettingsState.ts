@@ -11,6 +11,9 @@ export function loadPersistedSettings(data: unknown): NoteFlashcardsSettings {
     generatorMode: rawSettings.generatorMode ?? DEFAULT_SETTINGS.generatorMode,
     maxCardsPerNote: rawSettings.maxCardsPerNote ?? DEFAULT_SETTINGS.maxCardsPerNote,
     summaryLength: rawSettings.summaryLength ?? DEFAULT_SETTINGS.summaryLength,
+    mistakeTopicCardEntryEnabled: typeof rawSettings.mistakeTopicCardEntryEnabled === "boolean"
+      ? rawSettings.mistakeTopicCardEntryEnabled
+      : DEFAULT_SETTINGS.mistakeTopicCardEntryEnabled,
     aiModelConfigs,
     activeAiModelId: aiModelConfigs.some((config) => config.id === activeAiModelId) ? activeAiModelId : "",
     aiSectionCollapsed: typeof rawSettings.aiSectionCollapsed === "boolean" ? rawSettings.aiSectionCollapsed : DEFAULT_SETTINGS.aiSectionCollapsed,

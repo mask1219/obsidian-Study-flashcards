@@ -91,3 +91,21 @@ export async function clearMasteredMistakeCardsAction(
   notify(REVIEW_COPY.notices.clearedMasteredMistakes(removedCount));
   await reloadCards();
 }
+
+export async function generateByMistakeTopicAction(
+  card: Flashcard,
+  generateForMistakeTopic: (card: Flashcard) => Promise<{ addedCount: number; skippedCount: number }>,
+  reloadCards: (preferredCardId?: string, preferredIndex?: number) => Promise<void>,
+  notify: (message: string) => void,
+  preferredIndex = 0
+): Promise<void> {
+  const result = await generateForMistakeTopic(card);
+  if (result.addedCount === 0) {
+    notify(REVIEW_COPY.notices.mistakeTopicAllDuplicated);
+  } else if (result.skippedCount > 0) {
+    notify(REVIEW_COPY.notices.mistakeTopicGeneratedPartial(result.addedCount, result.skippedCount));
+  } else {
+    notify(REVIEW_COPY.notices.mistakeTopicGenerated(result.addedCount));
+  }
+  await reloadCards(card.id, preferredIndex);
+}

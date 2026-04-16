@@ -55,6 +55,15 @@ export class NoteFlashcardsSettingTab extends PluginSettingTab {
       });
 
     new Setting(containerEl)
+      .setName(SETTINGS_COPY.mistakeTopicCardEntry.name)
+      .setDesc(SETTINGS_COPY.mistakeTopicCardEntry.description)
+      .addToggle((toggle) => toggle
+        .setValue(this.plugin.settings.mistakeTopicCardEntryEnabled)
+        .onChange(async (value) => {
+          await updateSetting(this.plugin.settings, "mistakeTopicCardEntryEnabled", value, async () => this.plugin.saveSettings());
+        }));
+
+    new Setting(containerEl)
       .setName(SETTINGS_COPY.maxCardsPerNote.name)
       .setDesc(SETTINGS_COPY.maxCardsPerNote.description)
       .addText((text) => text

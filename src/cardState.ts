@@ -3,6 +3,13 @@ import type { CardState, Flashcard } from "./types";
 
 export function normalizeCard(card: Flashcard): Flashcard {
   const createdAt = card.createdAt ?? new Date().toISOString();
+  const generatedFromFlow = card.generatedFromFlow === "mistake-topic" ? card.generatedFromFlow : undefined;
+  const generatedFromCardId = typeof card.generatedFromCardId === "string" && card.generatedFromCardId.trim().length > 0
+    ? card.generatedFromCardId
+    : undefined;
+  const generatedTopic = typeof card.generatedTopic === "string" && card.generatedTopic.trim().length > 0
+    ? card.generatedTopic
+    : undefined;
   return {
     ...card,
     createdAt,
@@ -16,7 +23,10 @@ export function normalizeCard(card: Flashcard): Flashcard {
     learningStep: card.learningStep ?? 0,
     inMistakeBook: card.inMistakeBook ?? false,
     isMastered: card.isMastered ?? false,
-    mistakeSuccessStreak: card.mistakeSuccessStreak ?? 0
+    mistakeSuccessStreak: card.mistakeSuccessStreak ?? 0,
+    generatedFromFlow,
+    generatedFromCardId,
+    generatedTopic
   };
 }
 

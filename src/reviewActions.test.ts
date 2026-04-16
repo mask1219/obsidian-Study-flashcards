@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   clearMasteredMistakeCardsAction,
+  generateByMistakeTopicAction,
   generateForCurrentFolderAction,
   generateForCurrentNoteAction,
   openSourceNoteAction,
@@ -79,5 +80,38 @@ describe("reviewActions", () => {
     expect(reloadCards).toHaveBeenCalledWith("card-9", 4);
     expect(notify).toHaveBeenCalledWith("当前没有已掌握的错题可清理");
     expect(notify).toHaveBeenCalledWith("已清理 2 张已掌握错题");
+  });
+
+  it("notifies result summary when generating by mistake topic", async () => {
+    const notify = vi.fn();
+    const reloadCards = vi.fn(async () => undefined);
+    const card = createCard({ id: "mistake-1", inMistakeBook: true });
+
+    await generateByMistakeTopicAction(
+      card,
+      async () => ({ addedCount: 3, skippedCount: 0 }),
+      reloadCards,
+      notify,
+      1
+    );
+    await generateByMistakeTopicAction(
+      card,
+      async () => ({ addedCount: 2, skippedCount: 1 }),
+      reloadCards,
+      notify,
+      1
+    );
+    await generateByMistakeTopicAction(
+      card,
+      async () => ({ addedCount: 0, skippedCount: 5 }),
+      reloadCards,
+      notify,
+      1
+    );
+
+    expect(notify).toHaveBeenCalledWith("已新增 3 张与当前错题主题相关的学习卡片。");
+    expect(notify).toHaveBeenCalledWith("已新增 2 张卡片，跳过 1 张重复卡片。");
+    expect(notify).toHaveBeenCalledWith("当前主题相关卡片已存在，本次未新增卡片。");
+    expect(reloadCards).toHaveBeenCalledWith("mistake-1", 1);
   });
 });

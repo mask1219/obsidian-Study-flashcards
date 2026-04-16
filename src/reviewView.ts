@@ -5,12 +5,14 @@ import type { CardStore } from "./cardStore";
 import { REVIEW_COPY } from "./reviewCopy";
 import {
   clearMasteredMistakeCardsAction,
+  generateByMistakeTopicAction,
   generateForCurrentFolderAction,
   generateForCurrentNoteAction,
   openSourceNoteAction,
   toggleMasteredAction,
   toggleMistakeBookAction
 } from "./reviewActions";
+import type { MistakeTopicResolution } from "./mistakeTopicState";
 import { getWrappedReviewIndex, resolveReviewIndex } from "./reviewState";
 import { getStudyDisplayState, type StudyCardViewModel, type StudyDisplayState, type StudyEmptyStateViewModel } from "./studyViewModel";
 
@@ -29,6 +31,10 @@ export class ReviewView extends ItemView {
   private selectedCount = 0;
   private sessionCardIds: string[] = [];
   private lastSessionKey = "";
+  private mistakeTopicKey = "";
+  private mistakeTopicResolution: MistakeTopicResolution | null = null;
+  private mistakeTopicLoading = false;
+  private isGeneratingMistakeTopic = false;
   private readonly handleKeydown = (event: KeyboardEvent): void => {
     if (!this.isViewActive() || this.shouldIgnoreKeyboardEvent(event)) {
       return;
@@ -242,6 +248,98 @@ export class ReviewView extends ItemView {
     );
   }
 
+  private hashFingerprint(input: string): string {
+    let hash = 2166136261;
+    for (let index = 0; index < input.length; index += 1) {
+      hash ^= input.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(16);
+  }
+
+  private getActiveModelFingerprint(settings: ReturnType<GenerationService["getSettingsSnapshot"]>): string {
+    const activeConfig = settings.aiModelConfigs.find((config) => config.id === settings.activeAiModelId);
+    if (!activeConfig) {
+      return "no-active-model";
+    }
+    return this.hashFingerprint([
+      activeConfig.provider,
+      activeConfig.apiUrl,
+      activeConfig.model,
+      activeConfig.prompt,
+      activeConfig.apiKey
+    ].join("::"));
+  }
+
+  private getMistakeTopicKey(card: Flashcard): string {
+    const settings = this.generationService.getSettingsSnapshot();
+    return [
+      card.id,
+      settings.generatorMode,
+      settings.activeAiModelId,
+      settings.aiModelConfigs.length,
+      this.getActiveModelFingerprint(settings)
+    ].join("::");
+  }
+
+  private ensureMistakeTopicResolution(card: Flashcard): void {
+    const key = this.getMistakeTopicKey(card);
+    if (this.mistakeTopicKey === key && (this.mistakeTopicLoading || this.mistakeTopicResolution)) {
+      return;
+    }
+    this.mistakeTopicKey = key;
+    this.mistakeTopicLoading = true;
+    this.mistakeTopicResolution = null;
+    void this.resolveMistakeTopic(card, key);
+  }
+
+  private async resolveMistakeTopic(card: Flashcard, key: string): Promise<void> {
+    try {
+      const resolution = await this.generationService.resolveMistakeTopicForCard(card);
+      if (this.mistakeTopicKey !== key) {
+        return;
+      }
+      this.mistakeTopicResolution = resolution;
+    } catch (error) {
+      if (this.mistakeTopicKey !== key) {
+        return;
+      }
+      this.mistakeTopicResolution = {
+        topic: null,
+        source: null,
+        error: error instanceof Error ? error.message : REVIEW_COPY.mistakeTopic.noTopic
+      };
+    } finally {
+      if (this.mistakeTopicKey === key) {
+        this.mistakeTopicLoading = false;
+      }
+      this.render();
+    }
+  }
+
+  private async generateByMistakeTopic(card: Flashcard): Promise<void> {
+    if (this.isGeneratingMistakeTopic) {
+      return;
+    }
+    this.isGeneratingMistakeTopic = true;
+    this.render();
+    try {
+      await generateByMistakeTopicAction(
+        card,
+        (targetCard) => this.generationService.generateForMistakeTopic(targetCard),
+        (preferredCardId, preferredIndex) => this.reloadCards(preferredCardId, preferredIndex),
+        (message) => new Notice(message),
+        this.index
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : REVIEW_COPY.mistakeTopic.noTopic;
+      new Notice(message);
+    } finally {
+      this.isGeneratingMistakeTopic = false;
+      this.render();
+    }
+  }
+
   private getDisplayState(): StudyDisplayState {
     return getStudyDisplayState({
       cards: this.cards,
@@ -371,6 +469,51 @@ export class ReviewView extends ItemView {
     contentEl.createDiv({ cls: "note-flashcards-meta", text: cardView.meta });
   }
 
+  private renderMistakeTopicSection(contentEl: HTMLElement, card: Flashcard): void {
+    const settings = this.generationService.getSettingsSnapshot();
+    if (!settings.mistakeTopicCardEntryEnabled || !card.inMistakeBook) {
+      return;
+    }
+
+    this.ensureMistakeTopicResolution(card);
+
+    const section = contentEl.createDiv({ cls: "note-flashcards-mistake-topic" });
+    section.createDiv({ cls: "note-flashcards-mistake-topic-title", text: REVIEW_COPY.mistakeTopic.title });
+
+    if (this.mistakeTopicLoading) {
+      section.createDiv({ cls: "note-flashcards-mistake-topic-meta", text: REVIEW_COPY.mistakeTopic.loading });
+      return;
+    }
+
+    const topic = this.mistakeTopicResolution?.topic;
+    if (topic) {
+      section.createDiv({ cls: "note-flashcards-mistake-topic-topic", text: `${REVIEW_COPY.mistakeTopic.topicLabel}：${topic}` });
+    } else {
+      section.createDiv({
+        cls: "note-flashcards-mistake-topic-meta",
+        text: this.mistakeTopicResolution?.error ?? REVIEW_COPY.mistakeTopic.noTopic
+      });
+    }
+
+    if (settings.generatorMode === "rule") {
+      section.createDiv({ cls: "note-flashcards-mistake-topic-meta", text: REVIEW_COPY.mistakeTopic.aiRequired });
+      return;
+    }
+
+    if (!topic) {
+      return;
+    }
+
+    const actions = section.createDiv({ cls: "note-flashcards-mistake-topic-actions" });
+    const button = new ButtonComponent(actions)
+      .setButtonText(this.isGeneratingMistakeTopic ? REVIEW_COPY.mistakeTopic.generatingButton : REVIEW_COPY.mistakeTopic.generateButton)
+      .onClick(async () => await this.generateByMistakeTopic(card));
+    button.buttonEl.addClass("mod-cta");
+    if (this.isGeneratingMistakeTopic) {
+      button.buttonEl.addClass("is-disabled");
+    }
+  }
+
   private renderActions(contentEl: HTMLElement, card: Flashcard, cardView: StudyCardViewModel): void {
     const actions = contentEl.createDiv({ cls: "note-flashcards-actions" });
     new ButtonComponent(actions)
@@ -424,6 +567,7 @@ export class ReviewView extends ItemView {
 
     const card = this.cards[this.index];
     this.renderCard(contentEl, display.currentCard);
+    this.renderMistakeTopicSection(contentEl, card);
     this.renderActions(contentEl, card, display.currentCard);
     this.renderNavigation(contentEl, display);
   }
