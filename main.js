@@ -304,8 +304,9 @@ var SETTINGS_COPY = {
   },
   aiConnectionTest: {
     name: "AI \u8FDE\u63A5\u6D4B\u8BD5",
-    description: "\u4EC5\u4F7F\u7528\u5F53\u524D\u6B63\u5728\u7F16\u8F91\u7684\u6A21\u578B\u914D\u7F6E\u8FDB\u884C\u8FDE\u901A\u6027\u9A8C\u8BC1",
+    description: "\u53EF\u76F4\u63A5\u5728\u6A21\u578B\u5217\u8868\u6216\u7F16\u8F91\u533A\u9A8C\u8BC1\u6307\u5B9A\u6A21\u578B\u914D\u7F6E\u7684\u8FDE\u901A\u6027",
     button: "\u6D4B\u8BD5\u8FDE\u63A5",
+    loading: "\u6D4B\u8BD5\u4E2D...",
     success: "AI \u8FDE\u63A5\u6D4B\u8BD5\u6210\u529F",
     failed: (detail) => `AI \u8FDE\u63A5\u6D4B\u8BD5\u5931\u8D25${detail ? `\uFF1A${detail}` : ""}`
   },
@@ -709,7 +710,10 @@ function collectResponsesText(value) {
   return [
     ...collectResponsesText(payload.output_text),
     ...collectResponsesText(payload.text),
-    ...collectResponsesText(payload.content)
+    ...collectResponsesText(payload.content),
+    ...collectResponsesText(payload.output),
+    ...collectResponsesText(payload.delta),
+    ...collectResponsesText(payload.message)
   ];
 }
 function extractOpenAiResponsesContent(response) {
@@ -733,6 +737,58 @@ function extractOpenAiContent(response) {
     return content.map((part) => typeof part?.text === "string" ? part.text : "").join("").trim();
   }
   return "";
+}
+function extractOpenAiStreamContent(payload) {
+  const chatDelta = payload.choices?.[0]?.delta?.content;
+  if (typeof chatDelta === "string") {
+    return chatDelta.trim();
+  }
+  if (Array.isArray(chatDelta)) {
+    return chatDelta.map((part) => typeof part?.text === "string" ? part.text : "").join("").trim();
+  }
+  const directDelta = payload.delta;
+  if (typeof directDelta === "string") {
+    return directDelta.trim();
+  }
+  return "";
+}
+function extractStreamEventError(payload) {
+  const directError = payload.error;
+  if (typeof directError === "string" && directError.trim().length > 0) {
+    return directError.trim();
+  }
+  const nestedMessage = directError?.message;
+  if (typeof nestedMessage === "string" && nestedMessage.trim().length > 0) {
+    return nestedMessage.trim();
+  }
+  const message = payload.message;
+  if (typeof message === "string" && message.trim().length > 0) {
+    return message.trim();
+  }
+  return "";
+}
+function readSseDataFrames(buffer) {
+  const chunks = buffer.split(/\r?\n\r?\n/);
+  const rest = chunks.pop() ?? "";
+  return { frames: chunks, rest };
+}
+function parseStreamFrame(frame) {
+  const dataLines = frame.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trimStart());
+  if (dataLines.length === 0) {
+    return { isDone: false, payload: null };
+  }
+  const data = dataLines.join("\n").trim();
+  if (!data) {
+    return { isDone: false, payload: null };
+  }
+  if (data === "[DONE]") {
+    return { isDone: true, payload: null };
+  }
+  try {
+    return { isDone: false, payload: JSON.parse(data) };
+  } catch (_error) {
+    return { isDone: false, payload: null };
+  }
 }
 function extractAnthropicContent(response) {
   const content = response.content;
@@ -929,23 +985,23 @@ ${userPrompt}`
     return {
       url: apiUrl,
       headers: {
-        Authorization: `Bearer ${apiKey}`
+        Authorization: `Bearer ${apiKey}`,
+        Accept: "application/json"
       },
       body: JSON.stringify({
         model,
-        temperature: 0.2,
         ...useResponsesApi2 ? {
+          stream: false,
+          instructions: DEFAULT_SYSTEM_PROMPT,
           input: [
-            {
-              role: "system",
-              content: DEFAULT_SYSTEM_PROMPT
-            },
             {
               role: "user",
               content: userPrompt
             }
           ]
         } : {
+          stream: false,
+          temperature: 0.2,
           messages: [
             {
               role: "system",
@@ -964,23 +1020,23 @@ ${userPrompt}`
   return {
     url: apiUrl,
     headers: {
-      Authorization: `Bearer ${apiKey}`
+      Authorization: `Bearer ${apiKey}`,
+      Accept: "application/json"
     },
     body: JSON.stringify({
       model,
-      temperature: 0.2,
       ...useResponsesApi ? {
+        stream: false,
+        instructions: DEFAULT_SYSTEM_PROMPT,
         input: [
-          {
-            role: "system",
-            content: DEFAULT_SYSTEM_PROMPT
-          },
           {
             role: "user",
             content: userPrompt
           }
         ]
       } : {
+        stream: false,
+        temperature: 0.2,
         messages: [
           {
             role: "system",
@@ -1032,6 +1088,41 @@ function toNetworkErrorMessage(error) {
   }
   return appendRawDetail("\u7F51\u7EDC\u8BF7\u6C42\u5931\u8D25\uFF0C\u8BF7\u68C0\u67E5\u7F51\u7EDC\u8FDE\u63A5\u548C API URL", rawMessage);
 }
+function extractProviderContentFromSseText(rawText, provider) {
+  if (!rawText.trim()) {
+    return "";
+  }
+  const { frames } = readSseDataFrames(`${rawText}
+
+`);
+  let merged = "";
+  let completedResponseContent = "";
+  for (const frame of frames) {
+    const parsed = parseStreamFrame(frame);
+    if (parsed.isDone) {
+      break;
+    }
+    if (!parsed.payload) {
+      continue;
+    }
+    const eventError = extractStreamEventError(parsed.payload);
+    if (eventError) {
+      throw new Error(GENERATION_COPY.errors.aiRequestFailed(toHttpErrorMessage(400, eventError)));
+    }
+    const streamed = extractOpenAiStreamContent(parsed.payload);
+    if (streamed) {
+      merged += streamed;
+      continue;
+    }
+    const payloadWithResponse = parsed.payload;
+    const content = extractProviderContent(payloadWithResponse.response ?? parsed.payload, provider);
+    if (content) {
+      completedResponseContent = content;
+    }
+  }
+  const mergedContent = merged.trim();
+  return mergedContent || completedResponseContent.trim();
+}
 async function requestProviderContent(userPrompt, config) {
   const requestConfig = buildProviderRequest(userPrompt, config);
   let response;
@@ -1047,11 +1138,50 @@ async function requestProviderContent(userPrompt, config) {
   } catch (error) {
     throw new Error(GENERATION_COPY.errors.aiRequestFailed(toNetworkErrorMessage(error)));
   }
+  const responseText = typeof response.text === "string" ? response.text : "";
+  let responseJson = null;
+  let responseJsonError = null;
+  try {
+    responseJson = response.json;
+  } catch (error) {
+    responseJsonError = error instanceof Error ? error : new Error(String(error));
+  }
   if (response.status >= 400) {
-    const rawDetail = extractErrorDetail(response.status, response.json);
+    const rawDetail = responseJson !== null ? extractErrorDetail(response.status, responseJson) : extractErrorDetailFromRawText(response.status, responseText || responseJsonError?.message || "");
     throw new Error(GENERATION_COPY.errors.aiRequestFailed(toHttpErrorMessage(response.status, rawDetail)));
   }
-  return extractProviderContent(response.json, config.provider);
+  if (responseJson !== null) {
+    const contentFromJson = extractProviderContent(responseJson, config.provider);
+    if (contentFromJson.trim()) {
+      return contentFromJson;
+    }
+  }
+  if (responseText.trim()) {
+    const sseContent = extractProviderContentFromSseText(responseText, config.provider);
+    if (sseContent) {
+      return sseContent;
+    }
+    try {
+      return extractProviderContent(JSON.parse(responseText), config.provider);
+    } catch (_error) {
+      return responseText.trim();
+    }
+  }
+  if (responseJsonError) {
+    throw responseJsonError;
+  }
+  return "";
+}
+function extractErrorDetailFromRawText(status, text) {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return `HTTP ${status}`;
+  }
+  try {
+    return extractErrorDetail(status, JSON.parse(trimmed));
+  } catch (_error) {
+    return trimmed.length > 300 ? `${trimmed.slice(0, 300)}\u2026` : trimmed;
+  }
 }
 async function generateAiFlashcards(sections, settings) {
   const modelConfig = getActiveAiModelOrThrow(settings);
@@ -1122,7 +1252,7 @@ async function testAiConnection(modelConfig) {
   if (validationError) {
     throw new Error(validationError);
   }
-  const probePrompt = "\u8BF7\u56DE\u590D\u4EFB\u610F\u7B80\u77ED\u6587\u672C\u3002";
+  const probePrompt = "\u53EA\u56DE\u590D ok\u3002";
   const content = await requestProviderContent(probePrompt, modelConfig);
   if (!content.trim()) {
     throw new Error(GENERATION_COPY.errors.aiInvalidResponse);
@@ -1162,6 +1292,7 @@ var REVIEW_COPY = {
     cannotReadCurrentNote: "\u65E0\u6CD5\u8BFB\u53D6\u5F53\u524D\u7B14\u8BB0",
     noCurrentFolder: "\u5F53\u524D\u6CA1\u6709\u53EF\u7528\u7684\u7236\u6587\u4EF6\u5939",
     sourceNotFound: "\u627E\u4E0D\u5230\u539F\u6587\u7B14\u8BB0",
+    generateFailed: "\u751F\u6210\u5931\u8D25\uFF0C\u8BF7\u68C0\u67E5\u6A21\u578B\u914D\u7F6E\u3001\u7F51\u7EDC\u6216\u7B14\u8BB0\u5185\u5BB9\u3002",
     removedFromMistakes: "\u5DF2\u79FB\u51FA\u9519\u9898\u672C",
     addedToMistakes: "\u5DF2\u52A0\u5165\u9519\u9898\u672C",
     noMasteredMistakesToClear: "\u5F53\u524D\u6CA1\u6709\u5DF2\u638C\u63E1\u7684\u9519\u9898\u53EF\u6E05\u7406",
@@ -1632,6 +1763,7 @@ var NoteFlashcardsSettingTab = class extends import_obsidian3.PluginSettingTab {
     this.plugin = plugin;
     this.draftModel = null;
     this.editingModelId = null;
+    this.isConnectionTestRunning = false;
   }
   display() {
     const { containerEl } = this;
@@ -1754,6 +1886,12 @@ var NoteFlashcardsSettingTab = class extends import_obsidian3.PluginSettingTab {
         this.draftModel = { ...config };
         this.display();
       }));
+      setting.addButton((button) => {
+        this.syncConnectionTestButton(button);
+        button.onClick(async () => {
+          await this.runConnectionTestWithLoading(config, button);
+        });
+      });
       setting.addButton((button) => button.setButtonText(SETTINGS_COPY.aiModelActions.copy).onClick(async () => {
         const next = duplicateModelConfig(config, this.plugin.settings.aiModelConfigs.map((item) => item.name));
         this.plugin.settings.aiModelConfigs = [...this.plugin.settings.aiModelConfigs, next];
@@ -1867,24 +2005,16 @@ var NoteFlashcardsSettingTab = class extends import_obsidian3.PluginSettingTab {
       await this.plugin.saveSettings();
       this.clearDraft();
       this.display();
-    })).addButton((button) => button.setButtonText(SETTINGS_COPY.aiConnectionTest.button).onClick(async () => {
-      const draft = this.getNormalizedDraftModel();
-      if (!draft) {
-        return;
-      }
-      const validationError = validateModelConfigForRequest(draft);
-      if (validationError) {
-        new import_obsidian3.Notice(validationError);
-        return;
-      }
-      try {
-        await testAiConnection(draft);
-        new import_obsidian3.Notice(SETTINGS_COPY.aiConnectionTest.success);
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : void 0;
-        new import_obsidian3.Notice(SETTINGS_COPY.aiConnectionTest.failed(detail));
-      }
-    })).addButton((button) => button.setButtonText(SETTINGS_COPY.aiModelActions.cancel).onClick(() => {
+    })).addButton((button) => {
+      this.syncConnectionTestButton(button);
+      button.onClick(async () => {
+        const draft = this.getNormalizedDraftModel();
+        if (!draft) {
+          return;
+        }
+        await this.runConnectionTestWithLoading(draft, button);
+      });
+    }).addButton((button) => button.setButtonText(SETTINGS_COPY.aiModelActions.cancel).onClick(() => {
       this.clearDraft();
       this.display();
     }));
@@ -1893,14 +2023,48 @@ var NoteFlashcardsSettingTab = class extends import_obsidian3.PluginSettingTab {
     if (!this.draftModel) {
       return null;
     }
+    return this.normalizeModelConfig(this.draftModel);
+  }
+  normalizeModelConfig(config) {
     return {
-      ...this.draftModel,
-      name: this.draftModel.name.trim(),
-      apiUrl: this.draftModel.apiUrl.trim(),
-      apiKey: this.draftModel.apiKey.trim(),
-      model: this.draftModel.model.trim(),
-      prompt: this.draftModel.prompt.trim()
+      ...config,
+      name: config.name.trim(),
+      apiUrl: config.apiUrl.trim(),
+      apiKey: config.apiKey.trim(),
+      model: config.model.trim(),
+      prompt: config.prompt.trim()
     };
+  }
+  syncConnectionTestButton(button) {
+    button.setButtonText(this.isConnectionTestRunning ? SETTINGS_COPY.aiConnectionTest.loading : SETTINGS_COPY.aiConnectionTest.button).setDisabled(this.isConnectionTestRunning);
+  }
+  async runConnectionTestWithLoading(modelConfig, button) {
+    if (this.isConnectionTestRunning) {
+      return;
+    }
+    this.isConnectionTestRunning = true;
+    this.syncConnectionTestButton(button);
+    try {
+      await this.runConnectionTest(modelConfig);
+    } finally {
+      this.isConnectionTestRunning = false;
+      this.display();
+    }
+  }
+  async runConnectionTest(modelConfig) {
+    const normalizedModel = this.normalizeModelConfig(modelConfig);
+    const validationError = validateModelConfigForRequest(normalizedModel);
+    if (validationError) {
+      new import_obsidian3.Notice(validationError);
+      return;
+    }
+    try {
+      await testAiConnection(normalizedModel);
+      new import_obsidian3.Notice(SETTINGS_COPY.aiConnectionTest.success);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : void 0;
+      new import_obsidian3.Notice(SETTINGS_COPY.aiConnectionTest.failed(detail));
+    }
   }
   ensureDraftIsValid() {
     if (!this.draftModel) {
@@ -2092,6 +2256,38 @@ function getStudyDisplayState(input) {
   };
 }
 
+// src/clipboard.ts
+function getRuntimeRequire() {
+  const candidate = globalThis.require;
+  return typeof candidate === "function" ? candidate : null;
+}
+async function tryCopyToClipboard(text) {
+  if (!text.trim()) {
+    return false;
+  }
+  try {
+    if (typeof navigator !== "undefined" && typeof navigator.clipboard?.writeText === "function") {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (_error) {
+  }
+  try {
+    const runtimeRequire = getRuntimeRequire();
+    if (!runtimeRequire) {
+      return false;
+    }
+    const electron = runtimeRequire("electron");
+    if (typeof electron.clipboard?.writeText === "function") {
+      electron.clipboard.writeText(text);
+      return true;
+    }
+  } catch (_error) {
+    return false;
+  }
+  return false;
+}
+
 // src/reviewView.ts
 var REVIEW_VIEW_TYPE = "note-flashcards-review";
 var ReviewView = class _ReviewView extends import_obsidian4.ItemView {
@@ -2227,21 +2423,35 @@ var ReviewView = class _ReviewView extends import_obsidian4.ItemView {
     this.render();
   }
   async generateForCurrentNote() {
-    await generateForCurrentNoteAction(
-      this.getCurrentPath,
-      (path) => this.generationService.getFileByPath(path),
-      (file) => this.generationService.generateForFile(file),
-      () => this.reloadCards(),
-      (message) => new import_obsidian4.Notice(message)
-    );
+    try {
+      await generateForCurrentNoteAction(
+        this.getCurrentPath,
+        (path) => this.generationService.getFileByPath(path),
+        (file) => this.generationService.generateForFile(file),
+        () => this.reloadCards(),
+        (message) => new import_obsidian4.Notice(message)
+      );
+    } catch (error) {
+      const message = error instanceof Error && error.message.trim().length > 0 ? error.message : REVIEW_COPY.notices.generateFailed;
+      console.error("[note-flashcards] generate current note failed", error);
+      const copied = await tryCopyToClipboard(message);
+      new import_obsidian4.Notice(copied ? `${message}\uFF08\u5DF2\u590D\u5236\u5230\u526A\u8D34\u677F\uFF09` : message);
+    }
   }
   async generateForCurrentFolder() {
-    await generateForCurrentFolderAction(
-      this.getCurrentFolderPath,
-      (folderPath) => this.generationService.generateForFolder(folderPath),
-      () => this.reloadCards(),
-      (message) => new import_obsidian4.Notice(message)
-    );
+    try {
+      await generateForCurrentFolderAction(
+        this.getCurrentFolderPath,
+        (folderPath) => this.generationService.generateForFolder(folderPath),
+        () => this.reloadCards(),
+        (message) => new import_obsidian4.Notice(message)
+      );
+    } catch (error) {
+      const message = error instanceof Error && error.message.trim().length > 0 ? error.message : REVIEW_COPY.notices.generateFailed;
+      console.error("[note-flashcards] generate current folder failed", error);
+      const copied = await tryCopyToClipboard(message);
+      new import_obsidian4.Notice(copied ? `${message}\uFF08\u5DF2\u590D\u5236\u5230\u526A\u8D34\u677F\uFF09` : message);
+    }
   }
   async openFileAtSource(file, card) {
     const leaf = this.app.workspace.getLeaf(true);
@@ -2369,7 +2579,8 @@ var ReviewView = class _ReviewView extends import_obsidian4.ItemView {
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : REVIEW_COPY.mistakeTopic.noTopic;
-      new import_obsidian4.Notice(message);
+      const copied = await tryCopyToClipboard(message);
+      new import_obsidian4.Notice(copied ? `${message}\uFF08\u5DF2\u590D\u5236\u5230\u526A\u8D34\u677F\uFF09` : message);
     } finally {
       this.isGeneratingMistakeTopic = false;
       this.render();
@@ -2536,6 +2747,7 @@ var PLUGIN_COPY = {
     noCurrentFolder: "\u5F53\u524D\u6CA1\u6709\u53EF\u7528\u7684\u7236\u6587\u4EF6\u5939",
     noCurrentNote: "\u5F53\u524D\u6CA1\u6709\u53EF\u7528\u7684\u7B14\u8BB0",
     cannotOpenReviewView: "\u65E0\u6CD5\u6253\u5F00\u95EA\u5361\u89C6\u56FE",
+    generateFailed: "\u751F\u6210\u5931\u8D25\uFF0C\u8BF7\u68C0\u67E5\u6A21\u578B\u914D\u7F6E\u3001\u7F51\u7EDC\u6216\u7B14\u8BB0\u5185\u5BB9\u3002",
     resetCardsDone: "\u5DF2\u91CD\u7F6E\u6240\u6709\u5361\u7247\u6570\u636E",
     resetSettingsDone: "\u5DF2\u6062\u590D\u9ED8\u8BA4\u8BBE\u7F6E"
   },
@@ -2713,13 +2925,33 @@ var NoteFlashcardsPlugin = class extends import_obsidian5.Plugin {
     await this.saveSettings();
     new import_obsidian5.Notice(PLUGIN_COPY.notices.resetSettingsDone);
   }
+  toUserFacingErrorMessage(error, fallback) {
+    if (error instanceof Error && error.message.trim().length > 0) {
+      return error.message;
+    }
+    return fallback;
+  }
+  async runWithGenerationNotice(action) {
+    try {
+      await action();
+    } catch (error) {
+      console.error("[note-flashcards] generate failed", error);
+      const message = this.toUserFacingErrorMessage(error, PLUGIN_COPY.notices.generateFailed);
+      const copied = await tryCopyToClipboard(message);
+      new import_obsidian5.Notice(copied ? `${message}\uFF08\u5DF2\u590D\u5236\u5230\u526A\u8D34\u677F\uFF09` : message);
+    }
+  }
   async generateFileAndOpenReview(file) {
-    await this.generationService.generateForFile(file);
-    await this.activateReviewView();
+    await this.runWithGenerationNotice(async () => {
+      await this.generationService.generateForFile(file);
+      await this.activateReviewView();
+    });
   }
   async generateFolderAndOpenReview(folderPath) {
-    await this.generationService.generateForFolder(folderPath);
-    await this.activateReviewView();
+    await this.runWithGenerationNotice(async () => {
+      await this.generationService.generateForFolder(folderPath);
+      await this.activateReviewView();
+    });
   }
   async generateCurrentNote() {
     await runGenerateCurrentNote(this.requireCurrentFile(), (file) => this.generateFileAndOpenReview(file));

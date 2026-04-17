@@ -15,6 +15,7 @@ import {
 import type { MistakeTopicResolution } from "./mistakeTopicState";
 import { getWrappedReviewIndex, resolveReviewIndex } from "./reviewState";
 import { getStudyDisplayState, type StudyCardViewModel, type StudyDisplayState, type StudyEmptyStateViewModel } from "./studyViewModel";
+import { tryCopyToClipboard } from "./clipboard";
 
 export const REVIEW_VIEW_TYPE = "note-flashcards-review";
 
@@ -171,22 +172,40 @@ export class ReviewView extends ItemView {
   }
 
   private async generateForCurrentNote(): Promise<void> {
-    await generateForCurrentNoteAction(
-      this.getCurrentPath,
-      (path) => this.generationService.getFileByPath(path),
-      (file) => this.generationService.generateForFile(file as never),
-      () => this.reloadCards(),
-      (message) => new Notice(message)
-    );
+    try {
+      await generateForCurrentNoteAction(
+        this.getCurrentPath,
+        (path) => this.generationService.getFileByPath(path),
+        (file) => this.generationService.generateForFile(file as never),
+        () => this.reloadCards(),
+        (message) => new Notice(message)
+      );
+    } catch (error) {
+      const message = error instanceof Error && error.message.trim().length > 0
+        ? error.message
+        : REVIEW_COPY.notices.generateFailed;
+      console.error("[note-flashcards] generate current note failed", error);
+      const copied = await tryCopyToClipboard(message);
+      new Notice(copied ? `${message}（已复制到剪贴板）` : message);
+    }
   }
 
   private async generateForCurrentFolder(): Promise<void> {
-    await generateForCurrentFolderAction(
-      this.getCurrentFolderPath,
-      (folderPath) => this.generationService.generateForFolder(folderPath),
-      () => this.reloadCards(),
-      (message) => new Notice(message)
-    );
+    try {
+      await generateForCurrentFolderAction(
+        this.getCurrentFolderPath,
+        (folderPath) => this.generationService.generateForFolder(folderPath),
+        () => this.reloadCards(),
+        (message) => new Notice(message)
+      );
+    } catch (error) {
+      const message = error instanceof Error && error.message.trim().length > 0
+        ? error.message
+        : REVIEW_COPY.notices.generateFailed;
+      console.error("[note-flashcards] generate current folder failed", error);
+      const copied = await tryCopyToClipboard(message);
+      new Notice(copied ? `${message}（已复制到剪贴板）` : message);
+    }
   }
 
   private async openFileAtSource(file: unknown, card: Flashcard): Promise<void> {
@@ -333,7 +352,8 @@ export class ReviewView extends ItemView {
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : REVIEW_COPY.mistakeTopic.noTopic;
-      new Notice(message);
+      const copied = await tryCopyToClipboard(message);
+      new Notice(copied ? `${message}（已复制到剪贴板）` : message);
     } finally {
       this.isGeneratingMistakeTopic = false;
       this.render();

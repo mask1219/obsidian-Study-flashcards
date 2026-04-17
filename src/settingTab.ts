@@ -1,4 +1,4 @@
-import { App, Notice, PluginSettingTab, Setting } from "obsidian";
+import { App, ButtonComponent, Notice, PluginSettingTab, Setting } from "obsidian";
 import type NoteFlashcardsPlugin from "../main";
 import {
   AI_MODEL_ERRORS,
@@ -30,6 +30,7 @@ function getProviderLabel(provider: AiProvider): string {
 export class NoteFlashcardsSettingTab extends PluginSettingTab {
   private draftModel: AiModelConfig | null = null;
   private editingModelId: string | null = null;
+  private isConnectionTestRunning = false;
 
   constructor(app: App, private readonly plugin: NoteFlashcardsPlugin) {
     super(app, plugin);
@@ -262,6 +263,13 @@ export class NoteFlashcardsSettingTab extends PluginSettingTab {
           this.display();
         }));
 
+      setting.addButton((button) => {
+        this.syncConnectionTestButton(button);
+        button.onClick(async () => {
+          await this.runConnectionTestWithLoading(config, button);
+        });
+      });
+
       setting.addButton((button) => button
         .setButtonText(SETTINGS_COPY.aiModelActions.copy)
         .onClick(async () => {
@@ -448,28 +456,16 @@ export class NoteFlashcardsSettingTab extends PluginSettingTab {
           this.clearDraft();
           this.display();
         }))
-      .addButton((button) => button
-        .setButtonText(SETTINGS_COPY.aiConnectionTest.button)
-        .onClick(async () => {
+      .addButton((button) => {
+        this.syncConnectionTestButton(button);
+        button.onClick(async () => {
           const draft = this.getNormalizedDraftModel();
           if (!draft) {
             return;
           }
-
-          const validationError = validateModelConfigForRequest(draft);
-          if (validationError) {
-            new Notice(validationError);
-            return;
-          }
-
-          try {
-            await testAiConnection(draft);
-            new Notice(SETTINGS_COPY.aiConnectionTest.success);
-          } catch (error) {
-            const detail = error instanceof Error ? error.message : undefined;
-            new Notice(SETTINGS_COPY.aiConnectionTest.failed(detail));
-          }
-        }))
+          await this.runConnectionTestWithLoading(draft, button);
+        });
+      })
       .addButton((button) => button
         .setButtonText(SETTINGS_COPY.aiModelActions.cancel)
         .onClick(() => {
@@ -482,14 +478,57 @@ export class NoteFlashcardsSettingTab extends PluginSettingTab {
     if (!this.draftModel) {
       return null;
     }
+    return this.normalizeModelConfig(this.draftModel);
+  }
+
+  private normalizeModelConfig(config: AiModelConfig): AiModelConfig {
     return {
-      ...this.draftModel,
-      name: this.draftModel.name.trim(),
-      apiUrl: this.draftModel.apiUrl.trim(),
-      apiKey: this.draftModel.apiKey.trim(),
-      model: this.draftModel.model.trim(),
-      prompt: this.draftModel.prompt.trim()
+      ...config,
+      name: config.name.trim(),
+      apiUrl: config.apiUrl.trim(),
+      apiKey: config.apiKey.trim(),
+      model: config.model.trim(),
+      prompt: config.prompt.trim()
     };
+  }
+
+  private syncConnectionTestButton(button: ButtonComponent): void {
+    button
+      .setButtonText(this.isConnectionTestRunning ? SETTINGS_COPY.aiConnectionTest.loading : SETTINGS_COPY.aiConnectionTest.button)
+      .setDisabled(this.isConnectionTestRunning);
+  }
+
+  private async runConnectionTestWithLoading(modelConfig: AiModelConfig, button: ButtonComponent): Promise<void> {
+    if (this.isConnectionTestRunning) {
+      return;
+    }
+
+    this.isConnectionTestRunning = true;
+    this.syncConnectionTestButton(button);
+
+    try {
+      await this.runConnectionTest(modelConfig);
+    } finally {
+      this.isConnectionTestRunning = false;
+      this.display();
+    }
+  }
+
+  private async runConnectionTest(modelConfig: AiModelConfig): Promise<void> {
+    const normalizedModel = this.normalizeModelConfig(modelConfig);
+    const validationError = validateModelConfigForRequest(normalizedModel);
+    if (validationError) {
+      new Notice(validationError);
+      return;
+    }
+
+    try {
+      await testAiConnection(normalizedModel);
+      new Notice(SETTINGS_COPY.aiConnectionTest.success);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : undefined;
+      new Notice(SETTINGS_COPY.aiConnectionTest.failed(detail));
+    }
   }
 
   private ensureDraftIsValid(): void {

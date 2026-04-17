@@ -3,6 +3,7 @@ export const PLUGIN_COPY = {
     noCurrentFolder: "当前没有可用的父文件夹",
     noCurrentNote: "当前没有可用的笔记",
     cannotOpenReviewView: "无法打开闪卡视图",
+    generateFailed: "生成失败，请检查模型配置、网络或笔记内容。",
     resetCardsDone: "已重置所有卡片数据",
     resetSettingsDone: "已恢复默认设置"
   },

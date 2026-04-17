@@ -175,12 +175,79 @@ describe("generateAiFlashcards", () => {
     const requestPayload = JSON.parse(((requestUrlMock.mock.calls[0]?.[0] as { body?: string })?.body) ?? "{}") as {
       input?: unknown;
       messages?: unknown;
+      instructions?: unknown;
+      temperature?: unknown;
     };
     expect(Array.isArray(requestPayload.input)).toBe(true);
     expect(requestPayload.messages).toBeUndefined();
+    expect(typeof requestPayload.instructions).toBe("string");
+    expect(requestPayload.temperature).toBeUndefined();
     expect(cards[0]).toMatchObject({
       question: "Responses题目",
       answer: "Responses答案",
+      sourceHeading: "牛顿第一定律"
+    });
+  });
+
+  it("falls back to parsing SSE text when /responses JSON decoding fails", async () => {
+    const requestUrlMock = vi.spyOn(obsidian, "requestUrl");
+    requestUrlMock.mockResolvedValueOnce({
+      status: 200,
+      headers: {},
+      arrayBuffer: new ArrayBuffer(0),
+      text: [
+        "event: response.output_text.delta",
+        "data: {\"delta\":\"{\\\"cards\\\":[{\\\"sectionIndex\\\":0,\\\"question\\\":\\\"SSE题目\\\",\\\"answer\\\":\\\"SSE答案\\\"}]}\"}",
+        "",
+        "data: [DONE]",
+        ""
+      ].join("\n"),
+      get json() {
+        throw new Error("Unexpected token 'e', \"event: res\"... is not valid JSON");
+      }
+    });
+
+    const cards = await generateAiFlashcards(SECTIONS, createSettings({}, {
+      apiUrl: "https://api.openai.com/v1/responses",
+      model: "gpt-5.4"
+    }));
+
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({
+      question: "SSE题目",
+      answer: "SSE答案",
+      sourceHeading: "牛顿第一定律"
+    });
+  });
+
+  it("falls back to SSE text when JSON payload is present but has no extractable content", async () => {
+    const requestUrlMock = vi.spyOn(obsidian, "requestUrl");
+    requestUrlMock.mockResolvedValueOnce({
+      status: 200,
+      headers: {},
+      arrayBuffer: new ArrayBuffer(0),
+      text: [
+        "event: response.output_text.delta",
+        "data: {\"type\":\"response.output_text.delta\",\"delta\":\"{\\\"cards\\\":[{\\\"sectionIndex\\\":0,\\\"question\\\":\\\"SSE兜底题目\\\",\\\"answer\\\":\\\"SSE兜底答案\\\"}]}\"}",
+        "",
+        "event: response.completed",
+        "data: {\"type\":\"response.completed\",\"response\":{\"output_text\":\"ignored\"}}",
+        "",
+        "data: [DONE]",
+        ""
+      ].join("\n"),
+      json: {}
+    });
+
+    const cards = await generateAiFlashcards(SECTIONS, createSettings({}, {
+      apiUrl: "https://api.openai.com/v1/responses",
+      model: "gpt-5.4"
+    }));
+
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({
+      question: "SSE兜底题目",
+      answer: "SSE兜底答案",
       sourceHeading: "牛顿第一定律"
     });
   });

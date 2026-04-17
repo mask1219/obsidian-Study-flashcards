@@ -7,6 +7,7 @@ import { ReviewView, REVIEW_VIEW_TYPE } from "./src/reviewView";
 import { PLUGIN_COPY } from "./src/pluginCopy";
 import { activateReviewLeaf, runGenerateCurrentFolder, runGenerateCurrentNote } from "./src/pluginActions";
 import { buildSavedPluginData, loadPersistedSettings } from "./src/pluginSettingsState";
+import { tryCopyToClipboard } from "./src/clipboard";
 import type { NoteFlashcardsSettings } from "./src/types";
 
 export default class NoteFlashcardsPlugin extends Plugin {
@@ -140,14 +141,36 @@ export default class NoteFlashcardsPlugin extends Plugin {
     new Notice(PLUGIN_COPY.notices.resetSettingsDone);
   }
 
+  private toUserFacingErrorMessage(error: unknown, fallback: string): string {
+    if (error instanceof Error && error.message.trim().length > 0) {
+      return error.message;
+    }
+    return fallback;
+  }
+
+  private async runWithGenerationNotice(action: () => Promise<void>): Promise<void> {
+    try {
+      await action();
+    } catch (error) {
+      console.error("[note-flashcards] generate failed", error);
+      const message = this.toUserFacingErrorMessage(error, PLUGIN_COPY.notices.generateFailed);
+      const copied = await tryCopyToClipboard(message);
+      new Notice(copied ? `${message}（已复制到剪贴板）` : message);
+    }
+  }
+
   private async generateFileAndOpenReview(file: TFile): Promise<void> {
-    await this.generationService.generateForFile(file);
-    await this.activateReviewView();
+    await this.runWithGenerationNotice(async () => {
+      await this.generationService.generateForFile(file);
+      await this.activateReviewView();
+    });
   }
 
   private async generateFolderAndOpenReview(folderPath: string): Promise<void> {
-    await this.generationService.generateForFolder(folderPath);
-    await this.activateReviewView();
+    await this.runWithGenerationNotice(async () => {
+      await this.generationService.generateForFolder(folderPath);
+      await this.activateReviewView();
+    });
   }
 
   private async generateCurrentNote(): Promise<void> {

@@ -30,6 +30,7 @@ export const REVIEW_COPY = {
     cannotReadCurrentNote: "无法读取当前笔记",
     noCurrentFolder: "当前没有可用的父文件夹",
     sourceNotFound: "找不到原文笔记",
+    generateFailed: "生成失败，请检查模型配置、网络或笔记内容。",
     removedFromMistakes: "已移出错题本",
     addedToMistakes: "已加入错题本",
     noMasteredMistakesToClear: "当前没有已掌握的错题可清理",

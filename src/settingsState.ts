@@ -75,8 +75,9 @@ export const SETTINGS_COPY = {
   },
   aiConnectionTest: {
     name: "AI 连接测试",
-    description: "仅使用当前正在编辑的模型配置进行连通性验证",
+    description: "可直接在模型列表或编辑区验证指定模型配置的连通性",
     button: "测试连接",
+    loading: "测试中...",
     success: "AI 连接测试成功",
     failed: (detail?: string) => `AI 连接测试失败${detail ? `：${detail}` : ""}`
   },
