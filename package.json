@@ -1,6 +1,6 @@
 {
   "name": "obsidian-study-flashcards",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Obsidian plugin for generating and reviewing study flashcards from notes",
   "main": "main.js",
   "scripts": {
