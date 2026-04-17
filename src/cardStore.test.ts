@@ -44,9 +44,10 @@ function createCard(overrides: Partial<Flashcard> = {}): Flashcard {
 function createStore(cards: Flashcard[]) {
   let persisted: Awaited<ReturnType<CardStore["getData"]>> = { cards, settings: SETTINGS };
   const store = new CardStore(
-    async () => persisted,
-    async (data) => {
+    () => Promise.resolve(persisted),
+    (data) => {
       persisted = data;
+      return Promise.resolve();
     }
   );
 

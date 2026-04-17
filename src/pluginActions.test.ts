@@ -4,8 +4,8 @@ import { activateReviewLeaf, runGenerateCurrentFolder, runGenerateCurrentNote } 
 
 describe("pluginActions", () => {
   it("short-circuits current note and folder generation when context is missing", async () => {
-    const generateFileAndOpenReview = vi.fn(async () => undefined);
-    const generateFolderAndOpenReview = vi.fn(async () => undefined);
+    const generateFileAndOpenReview = vi.fn(() => Promise.resolve(undefined));
+    const generateFolderAndOpenReview = vi.fn(() => Promise.resolve(undefined));
 
     expect(await runGenerateCurrentNote(null, generateFileAndOpenReview)).toBe(false);
     expect(await runGenerateCurrentFolder(null, generateFolderAndOpenReview)).toBe(false);
@@ -19,8 +19,8 @@ describe("pluginActions", () => {
     const folder = new TFolder();
     folder.path = "folder";
     file.parent = folder;
-    const generateFileAndOpenReview = vi.fn(async () => undefined);
-    const generateFolderAndOpenReview = vi.fn(async () => undefined);
+    const generateFileAndOpenReview = vi.fn(() => Promise.resolve(undefined));
+    const generateFolderAndOpenReview = vi.fn(() => Promise.resolve(undefined));
 
     expect(await runGenerateCurrentNote(file, generateFileAndOpenReview)).toBe(true);
     expect(await runGenerateCurrentFolder(folder, generateFolderAndOpenReview)).toBe(true);
@@ -31,12 +31,12 @@ describe("pluginActions", () => {
   it("activates review view through existing or new leaves and stops when none exist", async () => {
     const revealLeaf = vi.fn();
     const notify = vi.fn();
-    const existingLeaf = { setViewState: vi.fn(async () => undefined) };
+    const existingLeaf = { setViewState: vi.fn(() => Promise.resolve(undefined)) };
     expect(await activateReviewLeaf(existingLeaf, () => null, revealLeaf, notify, "note-flashcards-review")).toBe(true);
     expect(existingLeaf.setViewState).toHaveBeenCalled();
     expect(revealLeaf).toHaveBeenCalledWith(existingLeaf);
 
-    const newLeaf = { setViewState: vi.fn(async () => undefined) };
+    const newLeaf = { setViewState: vi.fn(() => Promise.resolve(undefined)) };
     expect(await activateReviewLeaf(undefined, () => newLeaf, revealLeaf, notify, "note-flashcards-review")).toBe(true);
     expect(newLeaf.setViewState).toHaveBeenCalled();
     expect(revealLeaf).toHaveBeenCalledWith(newLeaf);

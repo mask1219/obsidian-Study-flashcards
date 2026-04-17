@@ -36,8 +36,8 @@ export default class NoteFlashcardsPlugin extends Plugin {
     );
     this.addSettingTab(new NoteFlashcardsSettingTab(this.app, this));
 
-    this.addRibbonIcon("lucide-layers", PLUGIN_COPY.ribbon.openReview, async () => {
-      await this.activateReviewView();
+    this.addRibbonIcon("lucide-layers", PLUGIN_COPY.ribbon.openReview, () => {
+      void this.activateReviewView();
     });
 
     this.registerEvent(this.app.workspace.on("file-menu", (menu: Menu, file: TAbstractFile, _source: string, _leaf?: WorkspaceLeaf) => {
@@ -47,19 +47,19 @@ export default class NoteFlashcardsPlugin extends Plugin {
       menu.addItem((item) => item
         .setTitle(PLUGIN_COPY.menu.generateCurrentNote)
         .setIcon("sparkles")
-        .onClick(async () => {
-          await this.generateFileAndOpenReview(file);
+        .onClick(() => {
+          void this.generateFileAndOpenReview(file);
         }));
 
       menu.addItem((item) => item
         .setTitle(PLUGIN_COPY.menu.generateCurrentFolder)
         .setIcon("folder-open")
-        .onClick(async () => {
+        .onClick(() => {
           const folder = this.requireCurrentFolder(file.parent);
           if (!folder) {
             return;
           }
-          await this.generateFolderAndOpenReview(folder.path);
+          void this.generateFolderAndOpenReview(folder.path);
         }));
     }));
 
@@ -72,8 +72,8 @@ export default class NoteFlashcardsPlugin extends Plugin {
       menu.addItem((item) => item
         .setTitle(PLUGIN_COPY.menu.generateCurrentNote)
         .setIcon("sparkles")
-        .onClick(async () => {
-          await this.generateFileAndOpenReview(file);
+        .onClick(() => {
+          void this.generateFileAndOpenReview(file);
         }));
     }));
 
@@ -110,15 +110,13 @@ export default class NoteFlashcardsPlugin extends Plugin {
     this.addCommand({
       id: "open-flashcards-review",
       name: PLUGIN_COPY.commands.openReview,
-      callback: async () => {
-        await this.activateReviewView();
+      callback: () => {
+        void this.activateReviewView();
       }
     });
   }
 
-  onunload(): void {
-    this.app.workspace.detachLeavesOfType(REVIEW_VIEW_TYPE);
-  }
+  onunload(): void {}
 
   async loadSettings(): Promise<void> {
     const loaded = await this.loadData();
@@ -213,7 +211,9 @@ export default class NoteFlashcardsPlugin extends Plugin {
     await activateReviewLeaf(
       this.app.workspace.getLeavesOfType(REVIEW_VIEW_TYPE)[0],
       (split) => this.app.workspace.getRightLeaf(split),
-      (leaf) => this.app.workspace.revealLeaf(leaf),
+      (leaf) => {
+        this.app.workspace.revealLeaf(leaf);
+      },
       (message) => new Notice(message),
       REVIEW_VIEW_TYPE
     );

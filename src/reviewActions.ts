@@ -1,10 +1,11 @@
+import type { TFile } from "obsidian";
 import type { Flashcard } from "./types";
 import { REVIEW_COPY } from "./reviewCopy";
 
 export async function generateForCurrentNoteAction(
   getCurrentPath: () => string | undefined,
-  getFileByPath: (path: string) => unknown,
-  generateForFile: (file: unknown) => Promise<unknown>,
+  getFileByPath: (path: string) => TFile | null,
+  generateForFile: (file: TFile) => Promise<unknown>,
   reloadCards: () => Promise<void>,
   notify: (message: string) => void
 ): Promise<void> {
@@ -42,8 +43,8 @@ export async function generateForCurrentFolderAction(
 
 export async function openSourceNoteAction(
   card: Flashcard,
-  getFileByPath: (path: string) => unknown,
-  openFile: (file: unknown, card: Flashcard) => Promise<void>,
+  getFileByPath: (path: string) => TFile | null,
+  openFile: (file: TFile, card: Flashcard) => Promise<void>,
   notify: (message: string) => void
 ): Promise<void> {
   const file = getFileByPath(card.sourcePath);

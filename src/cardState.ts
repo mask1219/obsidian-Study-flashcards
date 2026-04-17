@@ -1,5 +1,5 @@
 import { MISTAKE_AUTO_REMOVE_STREAK } from "./types";
-import type { CardState, Flashcard } from "./types";
+import type { Flashcard } from "./types";
 
 export function normalizeCard(card: Flashcard): Flashcard {
   const createdAt = card.createdAt ?? new Date().toISOString();
@@ -19,7 +19,7 @@ export function normalizeCard(card: Flashcard): Flashcard {
     repetition: card.repetition ?? 0,
     lapseCount: card.lapseCount ?? 0,
     reviewCount: card.reviewCount ?? 0,
-    cardState: (card.cardState ?? "new") as CardState,
+    cardState: card.cardState ?? "new",
     learningStep: card.learningStep ?? 0,
     inMistakeBook: card.inMistakeBook ?? false,
     isMastered: card.isMastered ?? false,

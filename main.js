@@ -785,7 +785,11 @@ function parseStreamFrame(frame) {
     return { isDone: true, payload: null };
   }
   try {
-    return { isDone: false, payload: JSON.parse(data) };
+    const payload = JSON.parse(data);
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      return { isDone: false, payload: null };
+    }
+    return { isDone: false, payload };
   } catch (_error) {
     return { isDone: false, payload: null };
   }
@@ -1162,7 +1166,10 @@ async function requestProviderContent(userPrompt, config) {
       return sseContent;
     }
     try {
-      return extractProviderContent(JSON.parse(responseText), config.provider);
+      const parsedResponse = JSON.parse(responseText);
+      if (parsedResponse && typeof parsedResponse === "object" && !Array.isArray(parsedResponse)) {
+        return extractProviderContent(parsedResponse, config.provider);
+      }
     } catch (_error) {
       return responseText.trim();
     }
@@ -1411,7 +1418,7 @@ function stripMarkdown(text) {
   return text.replace(/`[^`]*`/g, " ").replace(/\[[^\]]*\]\([^)]+\)/g, " ").replace(/[>*#_\-\n\r\t]/g, " ").replace(/\s+/g, " ").trim();
 }
 function normalizeTopicCandidate(raw) {
-  const cleaned = stripMarkdown(raw).replace(/^[：:;；,.，。!?！？()\[\]【】\s]+/g, "").replace(/[：:;；,.，。!?！？()\[\]【】\s]+$/g, "").replace(/^关于/g, "").trim();
+  const cleaned = stripMarkdown(raw).replace(/^[：:;；,.，。!?！？()[\]【】\s]+/g, "").replace(/[：:;；,.，。!?！？()[\]【】\s]+$/g, "").replace(/^关于/g, "").trim();
   if (cleaned.length < 2 || cleaned.length > 24) {
     return null;
   }
@@ -1450,7 +1457,7 @@ function scoreQuestionToken(token) {
 }
 function extractTopicFromQuestion(question) {
   const normalizedQuestion = stripMarkdown(question);
-  const topicBeforeQuestionPattern = /([\u4e00-\u9fa5A-Za-z0-9#+\-]{2,24})(?:的)?(?:是什么|是啥|作用|特点|原理|步骤|复杂度|区别|定义|如何|为什么|怎么|有哪些|包括|属于)/;
+  const topicBeforeQuestionPattern = /([\u4e00-\u9fa5A-Za-z0-9#+-]{2,24})(?:的)?(?:是什么|是啥|作用|特点|原理|步骤|复杂度|区别|定义|如何|为什么|怎么|有哪些|包括|属于)/;
   const match = topicBeforeQuestionPattern.exec(normalizedQuestion);
   if (match?.[1]) {
     const candidate = normalizeTopicCandidate(trimPossessiveSuffix(match[1].replace(/^(请问|关于)/, "").trim()));
@@ -1458,7 +1465,7 @@ function extractTopicFromQuestion(question) {
       return candidate;
     }
   }
-  const tokens = normalizedQuestion.match(/[A-Za-z][A-Za-z0-9#+\-]{1,20}|[\u4e00-\u9fa5]{2,12}/g) ?? [];
+  const tokens = normalizedQuestion.match(/[A-Za-z][A-Za-z0-9#+-]{1,20}|[\u4e00-\u9fa5]{2,12}/g) ?? [];
   const ranked = tokens.map((token) => ({ token, score: scoreQuestionToken(token) })).filter((entry) => entry.score > 0).sort((a, b) => b.score - a.score);
   const best = ranked[0]?.token;
   return best ? normalizeTopicCandidate(best) : null;
@@ -2343,8 +2350,9 @@ var ReviewView = class _ReviewView extends import_obsidian4.ItemView {
     window.addEventListener("keydown", this.handleKeydown);
     await this.reloadCards();
   }
-  async onClose() {
+  onClose() {
     window.removeEventListener("keydown", this.handleKeydown);
+    return Promise.resolve();
   }
   getStudySourcePath() {
     if (this.studyScope === "current") {
@@ -2471,7 +2479,7 @@ var ReviewView = class _ReviewView extends import_obsidian4.ItemView {
     await openSourceNoteAction(
       card,
       (path) => this.generationService.getFileByPath(path),
-      async (file, sourceCard) => await this.openFileAtSource(file, sourceCard),
+      this.openFileAtSource.bind(this),
       (message) => new import_obsidian4.Notice(message)
     );
   }
@@ -2606,10 +2614,14 @@ var ReviewView = class _ReviewView extends import_obsidian4.ItemView {
     }
     const actions = emptyState.createDiv({ cls: "note-flashcards-empty-actions" });
     if (emptyStateView.showGenerateCurrentNote) {
-      new import_obsidian4.ButtonComponent(actions).setButtonText(REVIEW_COPY.buttons.generateCurrentNote).onClick(async () => await this.generateForCurrentNote()).buttonEl.addClass("mod-cta");
+      new import_obsidian4.ButtonComponent(actions).setButtonText(REVIEW_COPY.buttons.generateCurrentNote).onClick(() => {
+        void this.generateForCurrentNote();
+      }).buttonEl.addClass("mod-cta");
     }
     if (emptyStateView.showGenerateCurrentFolder) {
-      new import_obsidian4.ButtonComponent(actions).setButtonText(REVIEW_COPY.buttons.generateCurrentFolder).onClick(async () => await this.generateForCurrentFolder());
+      new import_obsidian4.ButtonComponent(actions).setButtonText(REVIEW_COPY.buttons.generateCurrentFolder).onClick(() => {
+        void this.generateForCurrentFolder();
+      });
     }
   }
   renderToolbar(contentEl, display) {
@@ -2619,40 +2631,46 @@ var ReviewView = class _ReviewView extends import_obsidian4.ItemView {
     const utilityGroup = toolbar.createDiv({ cls: "note-flashcards-toolbar-group" });
     new import_obsidian4.Setting(filterGroup).setName(REVIEW_COPY.study.scopeLabel).addDropdown((dropdown) => {
       display.toolbar.scopeOptions.forEach((option) => dropdown.addOption(option.value, option.label));
-      dropdown.setValue(this.studyScope).onChange(async (value) => {
+      dropdown.setValue(this.studyScope).onChange((value) => {
         this.studyScope = value;
-        await this.reloadCards();
+        void this.reloadCards();
       });
     });
     new import_obsidian4.Setting(filterGroup).setName(REVIEW_COPY.study.countModeLabel).addDropdown((dropdown) => {
       display.toolbar.countModeOptions.forEach((option) => dropdown.addOption(option.value, option.label));
-      dropdown.setValue(this.countMode).onChange(async (value) => {
+      dropdown.setValue(this.countMode).onChange((value) => {
         this.countMode = value;
-        await this.reloadCards();
+        void this.reloadCards();
       });
     });
     new import_obsidian4.Setting(filterGroup).setName(REVIEW_COPY.study.orderModeLabel).addDropdown((dropdown) => {
       display.toolbar.orderModeOptions.forEach((option) => dropdown.addOption(option.value, option.label));
-      dropdown.setValue(this.orderMode).onChange(async (value) => {
+      dropdown.setValue(this.orderMode).onChange((value) => {
         this.orderMode = value;
-        await this.reloadCards();
+        void this.reloadCards();
       });
     });
-    new import_obsidian4.Setting(filterGroup).setName(REVIEW_COPY.study.onlyMistakesLabel).addToggle((toggle) => toggle.setValue(this.includeMistakeBookOnly).onChange(async (value) => {
+    new import_obsidian4.Setting(filterGroup).setName(REVIEW_COPY.study.onlyMistakesLabel).addToggle((toggle) => toggle.setValue(this.includeMistakeBookOnly).onChange((value) => {
       this.includeMistakeBookOnly = value;
-      await this.reloadCards();
+      void this.reloadCards();
     }));
-    new import_obsidian4.Setting(filterGroup).setName(REVIEW_COPY.study.excludeMasteredLabel).addToggle((toggle) => toggle.setValue(this.excludeMastered).onChange(async (value) => {
+    new import_obsidian4.Setting(filterGroup).setName(REVIEW_COPY.study.excludeMasteredLabel).addToggle((toggle) => toggle.setValue(this.excludeMastered).onChange((value) => {
       this.excludeMastered = value;
-      await this.reloadCards();
+      void this.reloadCards();
     }));
-    new import_obsidian4.ButtonComponent(utilityGroup).setButtonText(REVIEW_COPY.buttons.refreshQueue).onClick(async () => {
-      await this.reloadCards();
+    new import_obsidian4.ButtonComponent(utilityGroup).setButtonText(REVIEW_COPY.buttons.refreshQueue).onClick(() => {
+      void this.reloadCards();
       new import_obsidian4.Notice(REVIEW_COPY.notices.refreshed);
     });
-    new import_obsidian4.ButtonComponent(utilityGroup).setButtonText(REVIEW_COPY.buttons.clearMasteredMistakes).onClick(async () => await this.clearMasteredMistakeCards());
-    new import_obsidian4.ButtonComponent(generateGroup).setButtonText(REVIEW_COPY.buttons.generateCurrentNote).onClick(async () => await this.generateForCurrentNote()).buttonEl.addClass("mod-cta", "note-flashcards-toolbar-primary");
-    new import_obsidian4.ButtonComponent(generateGroup).setButtonText(REVIEW_COPY.buttons.generateCurrentFolder).onClick(async () => await this.generateForCurrentFolder()).buttonEl.addClass("note-flashcards-toolbar-primary");
+    new import_obsidian4.ButtonComponent(utilityGroup).setButtonText(REVIEW_COPY.buttons.clearMasteredMistakes).onClick(() => {
+      void this.clearMasteredMistakeCards();
+    });
+    new import_obsidian4.ButtonComponent(generateGroup).setButtonText(REVIEW_COPY.buttons.generateCurrentNote).onClick(() => {
+      void this.generateForCurrentNote();
+    }).buttonEl.addClass("mod-cta", "note-flashcards-toolbar-primary");
+    new import_obsidian4.ButtonComponent(generateGroup).setButtonText(REVIEW_COPY.buttons.generateCurrentFolder).onClick(() => {
+      void this.generateForCurrentFolder();
+    }).buttonEl.addClass("note-flashcards-toolbar-primary");
   }
   renderMeta(contentEl, display) {
     contentEl.createDiv({ cls: "note-flashcards-meta", text: display.selectionSummary });
@@ -2700,7 +2718,9 @@ var ReviewView = class _ReviewView extends import_obsidian4.ItemView {
       return;
     }
     const actions = section.createDiv({ cls: "note-flashcards-mistake-topic-actions" });
-    const button = new import_obsidian4.ButtonComponent(actions).setButtonText(this.isGeneratingMistakeTopic ? REVIEW_COPY.mistakeTopic.generatingButton : REVIEW_COPY.mistakeTopic.generateButton).onClick(async () => await this.generateByMistakeTopic(card));
+    const button = new import_obsidian4.ButtonComponent(actions).setButtonText(this.isGeneratingMistakeTopic ? REVIEW_COPY.mistakeTopic.generatingButton : REVIEW_COPY.mistakeTopic.generateButton).onClick(() => {
+      void this.generateByMistakeTopic(card);
+    });
     button.buttonEl.addClass("mod-cta");
     if (this.isGeneratingMistakeTopic) {
       button.buttonEl.addClass("is-disabled");
@@ -2709,9 +2729,15 @@ var ReviewView = class _ReviewView extends import_obsidian4.ItemView {
   renderActions(contentEl, card, cardView) {
     const actions = contentEl.createDiv({ cls: "note-flashcards-actions" });
     new import_obsidian4.ButtonComponent(actions).setButtonText(cardView.flipButtonLabel).onClick(() => this.toggleCardFace()).buttonEl.addClass("mod-cta");
-    new import_obsidian4.ButtonComponent(actions).setButtonText(REVIEW_COPY.buttons.openSource).onClick(async () => await this.openSourceNote(card));
-    new import_obsidian4.ButtonComponent(actions).setButtonText(cardView.mistakeToggleLabel).onClick(async () => await this.toggleMistakeBook(card)).buttonEl.addClass(cardView.mistakeToggleClass);
-    new import_obsidian4.ButtonComponent(actions).setButtonText(cardView.masteredToggleLabel).onClick(async () => await this.toggleMastered(card)).buttonEl.addClass(cardView.masteredToggleClass);
+    new import_obsidian4.ButtonComponent(actions).setButtonText(REVIEW_COPY.buttons.openSource).onClick(() => {
+      void this.openSourceNote(card);
+    });
+    new import_obsidian4.ButtonComponent(actions).setButtonText(cardView.mistakeToggleLabel).onClick(() => {
+      void this.toggleMistakeBook(card);
+    }).buttonEl.addClass(cardView.mistakeToggleClass);
+    new import_obsidian4.ButtonComponent(actions).setButtonText(cardView.masteredToggleLabel).onClick(() => {
+      void this.toggleMastered(card);
+    }).buttonEl.addClass(cardView.masteredToggleClass);
   }
   renderNavigation(contentEl, display) {
     if (!display.navigationLabel) {
@@ -2842,22 +2868,22 @@ var NoteFlashcardsPlugin = class extends import_obsidian5.Plugin {
       )
     );
     this.addSettingTab(new NoteFlashcardsSettingTab(this.app, this));
-    this.addRibbonIcon("lucide-layers", PLUGIN_COPY.ribbon.openReview, async () => {
-      await this.activateReviewView();
+    this.addRibbonIcon("lucide-layers", PLUGIN_COPY.ribbon.openReview, () => {
+      void this.activateReviewView();
     });
     this.registerEvent(this.app.workspace.on("file-menu", (menu, file, _source, _leaf) => {
       if (!(file instanceof import_obsidian5.TFile)) {
         return;
       }
-      menu.addItem((item) => item.setTitle(PLUGIN_COPY.menu.generateCurrentNote).setIcon("sparkles").onClick(async () => {
-        await this.generateFileAndOpenReview(file);
+      menu.addItem((item) => item.setTitle(PLUGIN_COPY.menu.generateCurrentNote).setIcon("sparkles").onClick(() => {
+        void this.generateFileAndOpenReview(file);
       }));
-      menu.addItem((item) => item.setTitle(PLUGIN_COPY.menu.generateCurrentFolder).setIcon("folder-open").onClick(async () => {
+      menu.addItem((item) => item.setTitle(PLUGIN_COPY.menu.generateCurrentFolder).setIcon("folder-open").onClick(() => {
         const folder = this.requireCurrentFolder(file.parent);
         if (!folder) {
           return;
         }
-        await this.generateFolderAndOpenReview(folder.path);
+        void this.generateFolderAndOpenReview(folder.path);
       }));
     }));
     this.registerEvent(this.app.workspace.on("editor-menu", (menu, _editor, info) => {
@@ -2865,8 +2891,8 @@ var NoteFlashcardsPlugin = class extends import_obsidian5.Plugin {
       if (!file) {
         return;
       }
-      menu.addItem((item) => item.setTitle(PLUGIN_COPY.menu.generateCurrentNote).setIcon("sparkles").onClick(async () => {
-        await this.generateFileAndOpenReview(file);
+      menu.addItem((item) => item.setTitle(PLUGIN_COPY.menu.generateCurrentNote).setIcon("sparkles").onClick(() => {
+        void this.generateFileAndOpenReview(file);
       }));
     }));
     this.addCommand({
@@ -2900,13 +2926,12 @@ var NoteFlashcardsPlugin = class extends import_obsidian5.Plugin {
     this.addCommand({
       id: "open-flashcards-review",
       name: PLUGIN_COPY.commands.openReview,
-      callback: async () => {
-        await this.activateReviewView();
+      callback: () => {
+        void this.activateReviewView();
       }
     });
   }
   onunload() {
-    this.app.workspace.detachLeavesOfType(REVIEW_VIEW_TYPE);
   }
   async loadSettings() {
     const loaded = await this.loadData();
@@ -2986,7 +3011,9 @@ var NoteFlashcardsPlugin = class extends import_obsidian5.Plugin {
     await activateReviewLeaf(
       this.app.workspace.getLeavesOfType(REVIEW_VIEW_TYPE)[0],
       (split) => this.app.workspace.getRightLeaf(split),
-      (leaf) => this.app.workspace.revealLeaf(leaf),
+      (leaf) => {
+        this.app.workspace.revealLeaf(leaf);
+      },
       (message) => new import_obsidian5.Notice(message),
       REVIEW_VIEW_TYPE
     );

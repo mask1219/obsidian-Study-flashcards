@@ -31,7 +31,7 @@ describe("settingsState", () => {
 
   it("updates a setting and calls save", async () => {
     const settings = { ...DEFAULT_SETTINGS };
-    const save = vi.fn(async () => undefined);
+    const save = vi.fn(() => Promise.resolve(undefined));
 
     await updateSetting(settings, "newCardsPerDay", 20, save);
 

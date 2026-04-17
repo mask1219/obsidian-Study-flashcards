@@ -43,8 +43,8 @@ function stripMarkdown(text: string): string {
 
 function normalizeTopicCandidate(raw: string): string | null {
   const cleaned = stripMarkdown(raw)
-    .replace(/^[：:;；,.，。!?！？()\[\]【】\s]+/g, "")
-    .replace(/[：:;；,.，。!?！？()\[\]【】\s]+$/g, "")
+    .replace(/^[：:;；,.，。!?！？()[\]【】\s]+/g, "")
+    .replace(/[：:;；,.，。!?！？()[\]【】\s]+$/g, "")
     .replace(/^关于/g, "")
     .trim();
   if (cleaned.length < 2 || cleaned.length > 24) {
@@ -88,7 +88,7 @@ function scoreQuestionToken(token: string): number {
 
 function extractTopicFromQuestion(question: string): string | null {
   const normalizedQuestion = stripMarkdown(question);
-  const topicBeforeQuestionPattern = /([\u4e00-\u9fa5A-Za-z0-9#+\-]{2,24})(?:的)?(?:是什么|是啥|作用|特点|原理|步骤|复杂度|区别|定义|如何|为什么|怎么|有哪些|包括|属于)/;
+  const topicBeforeQuestionPattern = /([\u4e00-\u9fa5A-Za-z0-9#+-]{2,24})(?:的)?(?:是什么|是啥|作用|特点|原理|步骤|复杂度|区别|定义|如何|为什么|怎么|有哪些|包括|属于)/;
   const match = topicBeforeQuestionPattern.exec(normalizedQuestion);
   if (match?.[1]) {
     const candidate = normalizeTopicCandidate(trimPossessiveSuffix(match[1].replace(/^(请问|关于)/, "").trim()));
@@ -97,7 +97,7 @@ function extractTopicFromQuestion(question: string): string | null {
     }
   }
 
-  const tokens = normalizedQuestion.match(/[A-Za-z][A-Za-z0-9#+\-]{1,20}|[\u4e00-\u9fa5]{2,12}/g) ?? [];
+  const tokens = normalizedQuestion.match(/[A-Za-z][A-Za-z0-9#+-]{1,20}|[\u4e00-\u9fa5]{2,12}/g) ?? [];
   const ranked = tokens
     .map((token) => ({ token, score: scoreQuestionToken(token) }))
     .filter((entry) => entry.score > 0)

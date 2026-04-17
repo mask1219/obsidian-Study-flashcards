@@ -11,35 +11,39 @@ vi.mock("./generationStrategy", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./generationStrategy")>();
   return {
     ...actual,
-    generateCardsForSections: vi.fn(async (sections: ParsedSection[]) => sections.map((section: ParsedSection, index: number) => ({
-      id: `${section.sourcePath}-${index}`,
-      question: `${section.heading}?`,
-      answer: section.content,
-      sourcePath: section.sourcePath,
-      sourceHeading: section.heading,
-      sourceAnchorText: section.sourceAnchorText,
-      sourceStartLine: section.sourceStartLine,
-      sourceEndLine: section.sourceEndLine,
-      generatorType: "rule",
-      createdAt: "2026-04-10T00:00:00.000Z",
-      dueAt: "2026-04-10T00:00:00.000Z",
-      intervalDays: 0,
-      easeFactor: 2.5,
-      repetition: 0,
-      lapseCount: 0,
-      reviewCount: 0,
-      cardState: "new",
-      learningStep: 0,
-      inMistakeBook: false,
-      isMastered: false,
-      mistakeSuccessStreak: 0
-    })))
+    generateCardsForSections: vi.fn((sections: ParsedSection[]) =>
+      Promise.resolve(
+        sections.map((section: ParsedSection, index: number) => ({
+          id: `${section.sourcePath}-${index}`,
+          question: `${section.heading}?`,
+          answer: section.content,
+          sourcePath: section.sourcePath,
+          sourceHeading: section.heading,
+          sourceAnchorText: section.sourceAnchorText,
+          sourceStartLine: section.sourceStartLine,
+          sourceEndLine: section.sourceEndLine,
+          generatorType: "rule",
+          createdAt: "2026-04-10T00:00:00.000Z",
+          dueAt: "2026-04-10T00:00:00.000Z",
+          intervalDays: 0,
+          easeFactor: 2.5,
+          repetition: 0,
+          lapseCount: 0,
+          reviewCount: 0,
+          cardState: "new",
+          learningStep: 0,
+          inMistakeBook: false,
+          isMastered: false,
+          mistakeSuccessStreak: 0
+        }))
+      )
+    )
   };
 });
 
 vi.mock("./aiGenerator", () => ({
-  generateAiTopicFromCard: vi.fn(async () => "哈希表"),
-  generateAiFlashcardsForMistakeTopic: vi.fn(async () => [])
+  generateAiTopicFromCard: vi.fn(() => Promise.resolve("哈希表")),
+  generateAiFlashcardsForMistakeTopic: vi.fn(() => Promise.resolve([]))
 }));
 
 const SETTINGS: NoteFlashcardsSettings = {
@@ -93,13 +97,13 @@ function createService(cards: Flashcard[], settings: NoteFlashcardsSettings = SE
   getAbstractFileByPath?: (path: string) => unknown;
 } = {}): GenerationService {
   const store = {
-    getCards: async () => cards,
-    replaceCardsForSource: overrides.replaceCardsForSource ?? (async () => 0),
-    appendCardsWithDedupe: overrides.appendCardsWithDedupe ?? (async () => ({ addedCount: 0, skippedCount: 0 }))
+    getCards: () => Promise.resolve(cards),
+    replaceCardsForSource: overrides.replaceCardsForSource ?? (() => Promise.resolve(0)),
+    appendCardsWithDedupe: overrides.appendCardsWithDedupe ?? (() => Promise.resolve({ addedCount: 0, skippedCount: 0 }))
   } as never;
   const vault = {
     getAbstractFileByPath: overrides.getAbstractFileByPath ?? (() => null),
-    cachedRead: overrides.cachedRead ?? (async () => ""),
+    cachedRead: overrides.cachedRead ?? (() => Promise.resolve("")),
     getMarkdownFiles: overrides.getMarkdownFiles ?? (() => [])
   } as never;
 
@@ -108,10 +112,10 @@ function createService(cards: Flashcard[], settings: NoteFlashcardsSettings = SE
 
 describe("GenerationService", () => {
   it("generates cards for a file and replaces cards for that source", async () => {
-    const replaceCardsForSource = vi.fn(async (_sourcePath: string, newCards: Flashcard[]) => newCards.length);
+    const replaceCardsForSource = vi.fn((_sourcePath: string, newCards: Flashcard[]) => Promise.resolve(newCards.length));
     const service = createService([], SETTINGS, {
       replaceCardsForSource,
-      cachedRead: async () => "定义：说明"
+      cachedRead: () => Promise.resolve("定义：说明")
     });
 
     const count = await service.generateForFile({ path: "folder/note.md", basename: "note" } as never);
@@ -124,10 +128,10 @@ describe("GenerationService", () => {
   });
 
   it("generates cards for a folder while skipping ignored folders", async () => {
-    const replaceCardsForSource = vi.fn(async (_sourcePath: string, newCards: Flashcard[]) => newCards.length);
+    const replaceCardsForSource = vi.fn((_sourcePath: string, newCards: Flashcard[]) => Promise.resolve(newCards.length));
     const service = createService([], { ...SETTINGS, ignoredFolders: ["folder/skip"] }, {
       replaceCardsForSource,
-      cachedRead: async (file) => file.path.includes("keep") ? "保留内容" : "跳过内容",
+      cachedRead: (file) => Promise.resolve(file.path.includes("keep") ? "保留内容" : "跳过内容"),
       getMarkdownFiles: () => [
         { path: "folder/keep.md", basename: "keep" },
         { path: "folder/skip/ignored.md", basename: "ignored" },
@@ -307,7 +311,7 @@ describe("GenerationService", () => {
       createCard({ id: "new-2", question: "Q2", answer: "A2" })
     ]);
 
-    const appendCardsWithDedupe = vi.fn(async (_cards: Flashcard[]) => ({ addedCount: 1, skippedCount: 1 }));
+    const appendCardsWithDedupe = vi.fn((_cards: Flashcard[]) => Promise.resolve({ addedCount: 1, skippedCount: 1 }));
     const service = createService([], { ...SETTINGS, generatorMode: "ai" }, { appendCardsWithDedupe });
     const baseCard = createCard({
       id: "mistake-1",
@@ -343,9 +347,7 @@ describe("GenerationService", () => {
     ]);
 
     const service = createService([], { ...SETTINGS, generatorMode: "ai" }, {
-      appendCardsWithDedupe: async () => {
-        throw new Error("disk fail");
-      }
+      appendCardsWithDedupe: () => Promise.reject(new Error("disk fail"))
     });
 
     await expect(service.generateForMistakeTopic(createCard({

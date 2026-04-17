@@ -52,7 +52,7 @@ describe("mistakeTopicState", () => {
         sourceAnchorText: "查找边界"
       }),
       createSettings(),
-      async () => "不该调用"
+      () => Promise.resolve("不该调用")
     );
     expect(result).toEqual({
       topic: "二分查找",
@@ -67,7 +67,7 @@ describe("mistakeTopicState", () => {
         sourceAnchorText: "链表反转"
       }),
       createSettings(),
-      async () => "不该调用"
+      () => Promise.resolve("不该调用")
     );
     expect(result).toEqual({
       topic: "链表反转",
@@ -83,7 +83,7 @@ describe("mistakeTopicState", () => {
         question: "哈希表的冲突怎么处理？"
       }),
       createSettings(),
-      async () => "不该调用"
+      () => Promise.resolve("不该调用")
     );
     expect(result.topic).toBe("哈希表");
     expect(result.source).toBe("question");
@@ -97,7 +97,7 @@ describe("mistakeTopicState", () => {
         question: "请解释这道题。"
       }),
       createSettings(),
-      async () => "动态规划"
+      () => Promise.resolve("动态规划")
     );
     expect(result).toEqual({
       topic: "动态规划",
@@ -113,9 +113,7 @@ describe("mistakeTopicState", () => {
         question: "请解释这道题。"
       }),
       createSettings(),
-      async () => {
-        throw new Error("未配置任何 AI 模型，请先新增模型配置。");
-      }
+      () => Promise.reject(new Error("未配置任何 AI 模型，请先新增模型配置。"))
     );
     expect(result.topic).toBeNull();
     expect(result.error).toContain("未配置可用 AI 模型");

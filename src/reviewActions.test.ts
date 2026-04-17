@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { TFile } from "obsidian";
 import {
   clearMasteredMistakeCardsAction,
   generateByMistakeTopicAction,
@@ -36,12 +37,13 @@ function createCard(overrides: Partial<Flashcard> = {}): Flashcard {
 describe("reviewActions", () => {
   it("handles current note, folder, source opening, and mistake toggles with notices", async () => {
     const notify = vi.fn();
-    const reloadCards = vi.fn(async () => undefined);
-    const file = { path: "folder/note.md" };
-    const generateForFile = vi.fn(async () => undefined);
-    const generateForFolder = vi.fn(async () => undefined);
-    const openFile = vi.fn(async () => undefined);
-    const setMistakeBook = vi.fn(async () => undefined);
+    const reloadCards = vi.fn(() => Promise.resolve(undefined));
+    const file = new TFile();
+    file.path = "folder/note.md";
+    const generateForFile = vi.fn(() => Promise.resolve(undefined));
+    const generateForFolder = vi.fn(() => Promise.resolve(undefined));
+    const openFile = vi.fn(() => Promise.resolve(undefined));
+    const setMistakeBook = vi.fn(() => Promise.resolve(undefined));
     const sourceCard = createCard({ sourceAnchorText: "概念", sourceStartLine: 12 });
 
     await generateForCurrentNoteAction(() => undefined, () => null, generateForFile, reloadCards, notify);
@@ -68,13 +70,13 @@ describe("reviewActions", () => {
   });
 
   it("toggles mastered state and clears mastered mistakes", async () => {
-    const reloadCards = vi.fn(async () => undefined);
+    const reloadCards = vi.fn(() => Promise.resolve(undefined));
     const notify = vi.fn();
-    const setMastered = vi.fn(async () => undefined);
+    const setMastered = vi.fn(() => Promise.resolve(undefined));
 
     await toggleMasteredAction(createCard({ id: "card-9", isMastered: false }), setMastered, reloadCards, 4);
-    await clearMasteredMistakeCardsAction(async () => 0, reloadCards, notify);
-    await clearMasteredMistakeCardsAction(async () => 2, reloadCards, notify);
+    await clearMasteredMistakeCardsAction(() => Promise.resolve(0), reloadCards, notify);
+    await clearMasteredMistakeCardsAction(() => Promise.resolve(2), reloadCards, notify);
 
     expect(setMastered).toHaveBeenCalledWith("card-9", true);
     expect(reloadCards).toHaveBeenCalledWith("card-9", 4);
@@ -84,26 +86,26 @@ describe("reviewActions", () => {
 
   it("notifies result summary when generating by mistake topic", async () => {
     const notify = vi.fn();
-    const reloadCards = vi.fn(async () => undefined);
+    const reloadCards = vi.fn(() => Promise.resolve(undefined));
     const card = createCard({ id: "mistake-1", inMistakeBook: true });
 
     await generateByMistakeTopicAction(
       card,
-      async () => ({ addedCount: 3, skippedCount: 0 }),
+      () => Promise.resolve({ addedCount: 3, skippedCount: 0 }),
       reloadCards,
       notify,
       1
     );
     await generateByMistakeTopicAction(
       card,
-      async () => ({ addedCount: 2, skippedCount: 1 }),
+      () => Promise.resolve({ addedCount: 2, skippedCount: 1 }),
       reloadCards,
       notify,
       1
     );
     await generateByMistakeTopicAction(
       card,
-      async () => ({ addedCount: 0, skippedCount: 5 }),
+      () => Promise.resolve({ addedCount: 0, skippedCount: 5 }),
       reloadCards,
       notify,
       1

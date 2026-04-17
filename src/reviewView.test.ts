@@ -3,6 +3,50 @@ import { WorkspaceLeaf } from "obsidian";
 import { ReviewView } from "./reviewView";
 import type { Flashcard, StudySessionResult } from "./types";
 
+type OpenFileTarget = { path: string };
+
+type LeafEditor = {
+  setCursor: ReturnType<typeof vi.fn>;
+  scrollIntoView: ReturnType<typeof vi.fn>;
+};
+
+type LeafViewMock = {
+  setEphemeralState: ReturnType<typeof vi.fn>;
+  editor: LeafEditor;
+};
+
+type TestableReviewView = {
+  render: ReturnType<typeof vi.fn>;
+  app: {
+    workspace: {
+      getActiveViewOfType: () => ReviewView;
+      getLeaf: () => WorkspaceLeaf;
+    };
+  };
+  cards: Flashcard[];
+  index: number;
+  flipped: boolean;
+  totalCards: number;
+  selectedCount: number;
+  sessionCardIds: string[];
+  includeMistakeBookOnly: boolean;
+  excludeMastered: boolean;
+  studyScope: "current" | "folder" | "all";
+  countMode: "random10" | "all";
+  orderMode: "random" | "sequential";
+  handleKeydown: (event: { key: string; preventDefault: () => void; target: HTMLElement }) => void;
+  reloadCards: ReturnType<typeof vi.fn>;
+  toggleMistakeBook: (card: Flashcard) => Promise<void>;
+  toggleMastered: (card: Flashcard) => Promise<void>;
+  openSourceNote: (card: Flashcard) => Promise<void>;
+  generateByMistakeTopic: (card: Flashcard) => Promise<void>;
+  ensureMistakeTopicResolution: (card: Flashcard) => void;
+  getMistakeTopicKey: (card: Flashcard) => string;
+  mistakeTopicResolution: { topic: string; source: string } | null;
+  mistakeTopicLoading: boolean;
+  mistakeTopicKey: string;
+};
+
 function createCard(overrides: Partial<Flashcard> = {}): Flashcard {
   return {
     id: "card-1",
@@ -42,7 +86,7 @@ function createView(overrides: {
   getStudySession?: () => Promise<StudySessionResult>;
 } = {}) {
   const generationService = {
-    getStudySession: vi.fn(overrides.getStudySession ?? (async () => createSession())),
+    getStudySession: vi.fn(overrides.getStudySession ?? (() => Promise.resolve(createSession()))),
     getFileByPath: vi.fn(),
     getSettingsSnapshot: vi.fn(() => ({
       generatorMode: "ai",
@@ -58,25 +102,26 @@ function createView(overrides: {
         prompt: ""
       }]
     })),
-    resolveMistakeTopicForCard: vi.fn(async () => ({ topic: "哈希表", source: "sourceHeading" })),
-    generateForMistakeTopic: vi.fn(async () => ({ addedCount: 1, skippedCount: 0 }))
+    resolveMistakeTopicForCard: vi.fn(() => Promise.resolve({ topic: "哈希表", source: "sourceHeading" })),
+    generateForMistakeTopic: vi.fn(() => Promise.resolve({ addedCount: 1, skippedCount: 0 }))
   };
   const cardStore = {
-    setMistakeBook: vi.fn(async () => undefined),
-    setMastered: vi.fn(async () => undefined),
-    clearMasteredMistakeCards: vi.fn(async () => 0)
+    setMistakeBook: vi.fn(() => Promise.resolve(undefined)),
+    setMastered: vi.fn(() => Promise.resolve(undefined)),
+    clearMasteredMistakeCards: vi.fn(() => Promise.resolve(0))
   };
 
   const leaf = new WorkspaceLeaf();
-  const openFile = vi.fn(async () => undefined);
-  leaf.openFile = openFile;
-  leaf.view = {
+  const openFile = vi.fn((target: OpenFileTarget) => Promise.resolve(target));
+  leaf.openFile = openFile as never;
+  const leafView: LeafViewMock = {
     setEphemeralState: vi.fn(),
     editor: {
       setCursor: vi.fn(),
       scrollIntoView: vi.fn()
     }
-  } as any;
+  };
+  leaf.view = leafView as never;
 
   const view = new ReviewView(
     leaf,
@@ -85,7 +130,7 @@ function createView(overrides: {
     () => overrides.currentPath ?? "folder/note.md",
     () => overrides.currentFolderPath ?? "folder"
   );
-  const viewAny = view as any;
+  const viewAny = view as unknown as TestableReviewView;
   viewAny.render = vi.fn();
   viewAny.app = {
     workspace: {
@@ -94,7 +139,7 @@ function createView(overrides: {
     }
   };
 
-  return { view, viewAny, generationService, cardStore, leaf, openFile };
+  return { view, viewAny, generationService, cardStore, leaf, openFile, leafView };
 }
 
 class FakeHTMLElement {
@@ -123,7 +168,7 @@ describe("ReviewView", () => {
       sessionCardIds: ["a", "b"]
     });
     const { view, viewAny, generationService } = createView({
-      getStudySession: async () => session
+      getStudySession: () => Promise.resolve(session)
     });
     viewAny.flipped = true;
 
@@ -137,7 +182,7 @@ describe("ReviewView", () => {
       includeMistakeBookOnly: false,
       excludeMastered: false
     }, undefined);
-    expect(viewAny.cards.map((card: Flashcard) => card.id)).toEqual(["a", "b"]);
+    expect(viewAny.cards.map((card) => card.id)).toEqual(["a", "b"]);
     expect(viewAny.sessionCardIds).toEqual(["a", "b"]);
     expect(viewAny.index).toBe(1);
     expect(viewAny.totalCards).toBe(5);
@@ -183,7 +228,7 @@ describe("ReviewView", () => {
       includeMistakeBookOnly: false,
       excludeMastered: false
     }, ["a", "b"]);
-    expect(viewAny.cards.map((card: Flashcard) => card.id)).toEqual(["a", "b"]);
+    expect(viewAny.cards.map((card) => card.id)).toEqual(["a", "b"]);
     expect(viewAny.sessionCardIds).toEqual(["a", "b"]);
   });
 
@@ -226,7 +271,7 @@ describe("ReviewView", () => {
       includeMistakeBookOnly: false,
       excludeMastered: false
     }, undefined);
-    expect(viewAny.cards.map((card: Flashcard) => card.id)).toEqual(["a", "b", "c"]);
+    expect(viewAny.cards.map((card) => card.id)).toEqual(["a", "b", "c"]);
     expect(viewAny.sessionCardIds).toEqual(["a", "b", "c"]);
   });
 
@@ -269,7 +314,7 @@ describe("ReviewView", () => {
       includeMistakeBookOnly: false,
       excludeMastered: false
     }, undefined);
-    expect(viewAny.cards.map((card: Flashcard) => card.id)).toEqual(["a", "b", "c"]);
+    expect(viewAny.cards.map((card) => card.id)).toEqual(["a", "b", "c"]);
     expect(viewAny.sessionCardIds).toEqual(["a", "b", "c"]);
   });
 
@@ -300,7 +345,7 @@ describe("ReviewView", () => {
     const flipEvent = {
       key: " ",
       preventDefault: vi.fn(),
-      target: new FakeHTMLElement("DIV")
+      target: new FakeHTMLElement("DIV") as unknown as HTMLElement
     };
     viewAny.handleKeydown(flipEvent);
     expect(flipEvent.preventDefault).toHaveBeenCalled();
@@ -309,7 +354,7 @@ describe("ReviewView", () => {
     const nextEvent = {
       key: "ArrowRight",
       preventDefault: vi.fn(),
-      target: new FakeHTMLElement("DIV")
+      target: new FakeHTMLElement("DIV") as unknown as HTMLElement
     };
     viewAny.handleKeydown(nextEvent);
     expect(nextEvent.preventDefault).toHaveBeenCalled();
@@ -319,7 +364,7 @@ describe("ReviewView", () => {
     const previousEvent = {
       key: "ArrowLeft",
       preventDefault: vi.fn(),
-      target: new FakeHTMLElement("DIV")
+      target: new FakeHTMLElement("DIV") as unknown as HTMLElement
     };
     viewAny.handleKeydown(previousEvent);
     expect(previousEvent.preventDefault).toHaveBeenCalled();
@@ -333,7 +378,7 @@ describe("ReviewView", () => {
     const event = {
       key: " ",
       preventDefault: vi.fn(),
-      target: new FakeHTMLElement("BUTTON")
+      target: new FakeHTMLElement("BUTTON") as unknown as HTMLElement
     };
     viewAny.handleKeydown(event);
 
@@ -344,7 +389,7 @@ describe("ReviewView", () => {
   it("toggles mastered and mistake book through store helpers while keeping card position", async () => {
     const { viewAny, cardStore } = createView();
     const card = createCard({ id: "card-2", inMistakeBook: true, isMastered: false });
-    const reloadCards = vi.fn(async () => undefined);
+    const reloadCards = vi.fn(() => Promise.resolve(undefined));
     viewAny.reloadCards = reloadCards;
     viewAny.index = 2;
 
@@ -359,27 +404,27 @@ describe("ReviewView", () => {
 
   it("opens source note by anchor first, then line, then plain file open", async () => {
     const file = { path: "folder/note.md" };
-    const { viewAny, generationService, leaf, openFile } = createView();
+    const { viewAny, generationService, openFile, leafView } = createView();
     generationService.getFileByPath.mockReturnValue(file);
 
     await viewAny.openSourceNote(createCard({ sourceAnchorText: "概念", sourceStartLine: 12 }));
     expect(openFile).toHaveBeenCalledWith(file);
-    expect((leaf.view as any).setEphemeralState).toHaveBeenCalledWith({ subpath: "# 概念" });
+    expect(leafView.setEphemeralState).toHaveBeenCalledWith({ subpath: "# 概念" });
 
-    (leaf.view as any).setEphemeralState.mockClear();
+    leafView.setEphemeralState.mockClear();
     await viewAny.openSourceNote(createCard({ sourceAnchorText: undefined, sourceStartLine: 8 }));
-    expect((leaf.view as any).setEphemeralState).not.toHaveBeenCalled();
-    expect((leaf.view as any).editor.setCursor).toHaveBeenCalledWith({ line: 7, ch: 0 });
+    expect(leafView.setEphemeralState).not.toHaveBeenCalled();
+    expect(leafView.editor.setCursor).toHaveBeenCalledWith({ line: 7, ch: 0 });
 
-    (leaf.view as any).editor.setCursor.mockClear();
+    leafView.editor.setCursor.mockClear();
     await viewAny.openSourceNote(createCard({ sourceAnchorText: undefined, sourceStartLine: undefined }));
-    expect((leaf.view as any).editor.setCursor).not.toHaveBeenCalled();
+    expect(leafView.editor.setCursor).not.toHaveBeenCalled();
   });
 
   it("generates by mistake topic and keeps current card position", async () => {
     const { viewAny, generationService } = createView();
     const card = createCard({ id: "mistake-2", inMistakeBook: true });
-    const reloadCards = vi.fn(async () => undefined);
+    const reloadCards = vi.fn(() => Promise.resolve(undefined));
     viewAny.reloadCards = reloadCards;
     viewAny.index = 5;
 

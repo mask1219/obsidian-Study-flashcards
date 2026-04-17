@@ -250,7 +250,7 @@ async function cancelReader(reader: ReadableStreamDefaultReader<Uint8Array>): Pr
   }
 }
 
-function parseStreamFrame(frame: string): { isDone: boolean; payload: unknown | null } {
+function parseStreamFrame(frame: string): { isDone: boolean; payload: Record<string, unknown> | null } {
   const dataLines = frame
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -270,7 +270,11 @@ function parseStreamFrame(frame: string): { isDone: boolean; payload: unknown | 
   }
 
   try {
-    return { isDone: false, payload: JSON.parse(data) as unknown };
+    const payload = JSON.parse(data);
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      return { isDone: false, payload: null };
+    }
+    return { isDone: false, payload: payload as Record<string, unknown> };
   } catch (_error) {
     return { isDone: false, payload: null };
   }
@@ -743,7 +747,7 @@ async function requestProviderContent(userPrompt: string, config: AiModelConfig)
   }
 
   const responseText = typeof response.text === "string" ? response.text : "";
-  let responseJson: unknown | null = null;
+  let responseJson: Record<string, unknown> | null = null;
   let responseJsonError: Error | null = null;
 
   try {
@@ -772,7 +776,10 @@ async function requestProviderContent(userPrompt: string, config: AiModelConfig)
       return sseContent;
     }
     try {
-      return extractProviderContent(JSON.parse(responseText) as unknown, config.provider);
+      const parsedResponse = JSON.parse(responseText);
+      if (parsedResponse && typeof parsedResponse === "object" && !Array.isArray(parsedResponse)) {
+        return extractProviderContent(parsedResponse as Record<string, unknown>, config.provider);
+      }
     } catch (_error) {
       return responseText.trim();
     }

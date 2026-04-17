@@ -1,4 +1,4 @@
-import { ButtonComponent, ItemView, Notice, Setting, WorkspaceLeaf } from "obsidian";
+import { ButtonComponent, ItemView, Notice, Setting, TFile, WorkspaceLeaf } from "obsidian";
 import type { Flashcard, StudyCountMode, StudyOrderMode, StudyScope, StudySessionResult } from "./types";
 import type { GenerationService } from "./generationService";
 import type { CardStore } from "./cardStore";
@@ -82,8 +82,9 @@ export class ReviewView extends ItemView {
     await this.reloadCards();
   }
 
-  async onClose(): Promise<void> {
+  onClose(): Promise<void> {
     window.removeEventListener("keydown", this.handleKeydown);
+    return Promise.resolve();
   }
 
   private getStudySourcePath(): string | undefined {
@@ -176,7 +177,7 @@ export class ReviewView extends ItemView {
       await generateForCurrentNoteAction(
         this.getCurrentPath,
         (path) => this.generationService.getFileByPath(path),
-        (file) => this.generationService.generateForFile(file as never),
+        (file) => this.generationService.generateForFile(file),
         () => this.reloadCards(),
         (message) => new Notice(message)
       );
@@ -208,9 +209,9 @@ export class ReviewView extends ItemView {
     }
   }
 
-  private async openFileAtSource(file: unknown, card: Flashcard): Promise<void> {
+  private async openFileAtSource(file: TFile, card: Flashcard): Promise<void> {
     const leaf = this.app.workspace.getLeaf(true);
-    await leaf.openFile(file as never);
+    await leaf.openFile(file);
     const view = leaf.view as {
       setEphemeralState?: (state: { subpath: string }) => void;
       editor?: {
@@ -235,7 +236,7 @@ export class ReviewView extends ItemView {
     await openSourceNoteAction(
       card,
       (path) => this.generationService.getFileByPath(path),
-      async (file, sourceCard) => await this.openFileAtSource(file, sourceCard),
+      this.openFileAtSource.bind(this),
       (message) => new Notice(message)
     );
   }
@@ -384,14 +385,18 @@ export class ReviewView extends ItemView {
     if (emptyStateView.showGenerateCurrentNote) {
       new ButtonComponent(actions)
         .setButtonText(REVIEW_COPY.buttons.generateCurrentNote)
-        .onClick(async () => await this.generateForCurrentNote())
+        .onClick(() => {
+          void this.generateForCurrentNote();
+        })
         .buttonEl.addClass("mod-cta");
     }
 
     if (emptyStateView.showGenerateCurrentFolder) {
       new ButtonComponent(actions)
         .setButtonText(REVIEW_COPY.buttons.generateCurrentFolder)
-        .onClick(async () => await this.generateForCurrentFolder());
+        .onClick(() => {
+          void this.generateForCurrentFolder();
+        });
     }
   }
 
@@ -405,9 +410,9 @@ export class ReviewView extends ItemView {
       .setName(REVIEW_COPY.study.scopeLabel)
       .addDropdown((dropdown) => {
         display.toolbar.scopeOptions.forEach((option) => dropdown.addOption(option.value, option.label));
-        dropdown.setValue(this.studyScope).onChange(async (value) => {
+        dropdown.setValue(this.studyScope).onChange((value) => {
           this.studyScope = value as StudyScope;
-          await this.reloadCards();
+          void this.reloadCards();
         });
       });
 
@@ -415,9 +420,9 @@ export class ReviewView extends ItemView {
       .setName(REVIEW_COPY.study.countModeLabel)
       .addDropdown((dropdown) => {
         display.toolbar.countModeOptions.forEach((option) => dropdown.addOption(option.value, option.label));
-        dropdown.setValue(this.countMode).onChange(async (value) => {
+        dropdown.setValue(this.countMode).onChange((value) => {
           this.countMode = value as StudyCountMode;
-          await this.reloadCards();
+          void this.reloadCards();
         });
       });
 
@@ -425,45 +430,51 @@ export class ReviewView extends ItemView {
       .setName(REVIEW_COPY.study.orderModeLabel)
       .addDropdown((dropdown) => {
         display.toolbar.orderModeOptions.forEach((option) => dropdown.addOption(option.value, option.label));
-        dropdown.setValue(this.orderMode).onChange(async (value) => {
+        dropdown.setValue(this.orderMode).onChange((value) => {
           this.orderMode = value as StudyOrderMode;
-          await this.reloadCards();
+          void this.reloadCards();
         });
       });
 
     new Setting(filterGroup)
       .setName(REVIEW_COPY.study.onlyMistakesLabel)
-      .addToggle((toggle) => toggle.setValue(this.includeMistakeBookOnly).onChange(async (value) => {
+      .addToggle((toggle) => toggle.setValue(this.includeMistakeBookOnly).onChange((value) => {
         this.includeMistakeBookOnly = value;
-        await this.reloadCards();
+        void this.reloadCards();
       }));
 
     new Setting(filterGroup)
       .setName(REVIEW_COPY.study.excludeMasteredLabel)
-      .addToggle((toggle) => toggle.setValue(this.excludeMastered).onChange(async (value) => {
+      .addToggle((toggle) => toggle.setValue(this.excludeMastered).onChange((value) => {
         this.excludeMastered = value;
-        await this.reloadCards();
+        void this.reloadCards();
       }));
 
     new ButtonComponent(utilityGroup)
       .setButtonText(REVIEW_COPY.buttons.refreshQueue)
-      .onClick(async () => {
-        await this.reloadCards();
+      .onClick(() => {
+        void this.reloadCards();
         new Notice(REVIEW_COPY.notices.refreshed);
       });
 
     new ButtonComponent(utilityGroup)
       .setButtonText(REVIEW_COPY.buttons.clearMasteredMistakes)
-      .onClick(async () => await this.clearMasteredMistakeCards());
+      .onClick(() => {
+        void this.clearMasteredMistakeCards();
+      });
 
     new ButtonComponent(generateGroup)
       .setButtonText(REVIEW_COPY.buttons.generateCurrentNote)
-      .onClick(async () => await this.generateForCurrentNote())
+      .onClick(() => {
+          void this.generateForCurrentNote();
+        })
       .buttonEl.addClass("mod-cta", "note-flashcards-toolbar-primary");
 
     new ButtonComponent(generateGroup)
       .setButtonText(REVIEW_COPY.buttons.generateCurrentFolder)
-      .onClick(async () => await this.generateForCurrentFolder())
+      .onClick(() => {
+          void this.generateForCurrentFolder();
+        })
       .buttonEl.addClass("note-flashcards-toolbar-primary");
   }
 
@@ -527,7 +538,9 @@ export class ReviewView extends ItemView {
     const actions = section.createDiv({ cls: "note-flashcards-mistake-topic-actions" });
     const button = new ButtonComponent(actions)
       .setButtonText(this.isGeneratingMistakeTopic ? REVIEW_COPY.mistakeTopic.generatingButton : REVIEW_COPY.mistakeTopic.generateButton)
-      .onClick(async () => await this.generateByMistakeTopic(card));
+      .onClick(() => {
+        void this.generateByMistakeTopic(card);
+      });
     button.buttonEl.addClass("mod-cta");
     if (this.isGeneratingMistakeTopic) {
       button.buttonEl.addClass("is-disabled");
@@ -543,16 +556,22 @@ export class ReviewView extends ItemView {
 
     new ButtonComponent(actions)
       .setButtonText(REVIEW_COPY.buttons.openSource)
-      .onClick(async () => await this.openSourceNote(card));
+      .onClick(() => {
+        void this.openSourceNote(card);
+      });
 
     new ButtonComponent(actions)
       .setButtonText(cardView.mistakeToggleLabel)
-      .onClick(async () => await this.toggleMistakeBook(card))
+      .onClick(() => {
+        void this.toggleMistakeBook(card);
+      })
       .buttonEl.addClass(cardView.mistakeToggleClass);
 
     new ButtonComponent(actions)
       .setButtonText(cardView.masteredToggleLabel)
-      .onClick(async () => await this.toggleMastered(card))
+      .onClick(() => {
+        void this.toggleMastered(card);
+      })
       .buttonEl.addClass(cardView.masteredToggleClass);
   }
 
