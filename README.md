@@ -1,6 +1,6 @@
 # Study Flashcards
 
-Study Flashcards 是一个 Obsidian 社区插件，用来从笔记生成学习闪卡，并在侧边栏里完成复习。
+Study Flashcards 是一个社区插件，用来从笔记生成学习闪卡，并在侧边栏里完成复习。
 
 ## 功能
 

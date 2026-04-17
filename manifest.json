@@ -3,7 +3,7 @@
   "name": "Study Flashcards",
   "version": "0.1.1",
   "minAppVersion": "1.5.0",
-  "description": "Generate and review study flashcards from your Obsidian notes.",
+  "description": "Generate and review study flashcards from your notes.",
   "author": "少爷",
   "authorUrl": "https://github.com/mask1219",
   "isDesktopOnly": false
