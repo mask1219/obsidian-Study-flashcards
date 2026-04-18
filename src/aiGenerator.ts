@@ -38,94 +38,12 @@ function resolveProviderApiUrl(apiUrl: string, model: string): string {
   return apiUrl.includes("{model}") ? apiUrl.replace("{model}", encodeURIComponent(model)) : apiUrl;
 }
 
-type OpenAiStreamProbeMode = "responses" | "chat-completions";
-type RuntimeRequire = (id: string) => unknown;
-
 function isResponsesEndpoint(apiUrl: string): boolean {
   try {
     return /\/responses\/?$/.test(new URL(apiUrl).pathname);
-  } catch (_error) {
+  } catch {
     return false;
   }
-}
-
-function getOpenAiStreamProbeMode(config: AiModelConfig, apiUrl: string): OpenAiStreamProbeMode | null {
-  if (config.provider !== "openai-compatible" && config.provider !== "openrouter") {
-    return null;
-  }
-  try {
-    const pathname = new URL(apiUrl).pathname;
-    if (/\/responses\/?$/.test(pathname)) {
-      return "responses";
-    }
-    if (/\/chat\/completions\/?$/.test(pathname)) {
-      return "chat-completions";
-    }
-  } catch (_error) {
-    return null;
-  }
-  return null;
-}
-
-function getBrowserFetch():
-  ((input: RequestInfo | URL, init?: RequestInit) => Promise<Response>) | null {
-  if (typeof window === "undefined" || typeof window.fetch !== "function") {
-    return null;
-  }
-  return window.fetch.bind(window);
-}
-
-function getRuntimeRequire(): RuntimeRequire | null {
-  if (typeof require === "function") {
-    return require as RuntimeRequire;
-  }
-  const candidate = (globalThis as { require?: unknown }).require;
-  return typeof candidate === "function" ? candidate as RuntimeRequire : null;
-}
-
-function getNodeHttpRequest(protocol: string): ((options: unknown, callback: (response: unknown) => void) => {
-  on: (event: string, listener: (error: unknown) => void) => void;
-  setTimeout?: (timeout: number, callback: () => void) => void;
-  destroy?: (error?: Error) => void;
-  write: (chunk: string) => void;
-  end: () => void;
-}) | null {
-  const runtimeRequire = getRuntimeRequire();
-  if (!runtimeRequire) {
-    return null;
-  }
-
-  try {
-    if (protocol === "https:") {
-      const httpsModule = runtimeRequire("https") as { request?: unknown };
-      return typeof httpsModule.request === "function"
-        ? httpsModule.request as (options: unknown, callback: (response: unknown) => void) => {
-          on: (event: string, listener: (error: unknown) => void) => void;
-          setTimeout?: (timeout: number, callback: () => void) => void;
-          destroy?: (error?: Error) => void;
-          write: (chunk: string) => void;
-          end: () => void;
-        }
-        : null;
-    }
-
-    if (protocol === "http:") {
-      const httpModule = runtimeRequire("http") as { request?: unknown };
-      return typeof httpModule.request === "function"
-        ? httpModule.request as (options: unknown, callback: (response: unknown) => void) => {
-          on: (event: string, listener: (error: unknown) => void) => void;
-          setTimeout?: (timeout: number, callback: () => void) => void;
-          destroy?: (error?: Error) => void;
-          write: (chunk: string) => void;
-          end: () => void;
-        }
-        : null;
-    }
-  } catch (_error) {
-    return null;
-  }
-
-  return null;
 }
 
 function clip(text: string, maxLength: number): string {
@@ -223,31 +141,10 @@ function extractStreamEventError(payload: unknown): string {
   return "";
 }
 
-function buildStreamingProbeBody(body: string): string | null {
-  let payload: Record<string, unknown>;
-  try {
-    payload = JSON.parse(body) as Record<string, unknown>;
-  } catch (_error) {
-    return null;
-  }
-
-  payload.stream = true;
-
-  return JSON.stringify(payload);
-}
-
 function readSseDataFrames(buffer: string): { frames: string[]; rest: string } {
   const chunks = buffer.split(/\r?\n\r?\n/);
   const rest = chunks.pop() ?? "";
   return { frames: chunks, rest };
-}
-
-async function cancelReader(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<void> {
-  try {
-    await reader.cancel();
-  } catch (_error) {
-    // Ignore cancel errors when stream is already closed.
-  }
 }
 
 function parseStreamFrame(frame: string): { isDone: boolean; payload: Record<string, unknown> | null } {
@@ -275,72 +172,9 @@ function parseStreamFrame(frame: string): { isDone: boolean; payload: Record<str
       return { isDone: false, payload: null };
     }
     return { isDone: false, payload: payload as Record<string, unknown> };
-  } catch (_error) {
+  } catch {
     return { isDone: false, payload: null };
   }
-}
-
-async function readStreamingProbeContent(stream: ReadableStream<Uint8Array>): Promise<string> {
-  const reader = stream.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-
-      buffer += decoder.decode(value, { stream: true });
-      const { frames, rest } = readSseDataFrames(buffer);
-      buffer = rest;
-
-      for (const frame of frames) {
-        const parsed = parseStreamFrame(frame);
-        if (parsed.isDone) {
-          await cancelReader(reader);
-          return "ok";
-        }
-        if (!parsed.payload) {
-          continue;
-        }
-        const eventError = extractStreamEventError(parsed.payload);
-        if (eventError) {
-          throw new Error(eventError);
-        }
-
-        const streamed = extractOpenAiStreamContent(parsed.payload);
-        await cancelReader(reader);
-        return streamed || "ok";
-      }
-    }
-
-    buffer += decoder.decode();
-    const { frames } = readSseDataFrames(buffer);
-    for (const frame of frames) {
-      const parsed = parseStreamFrame(frame);
-      if (parsed.isDone) {
-        return "ok";
-      }
-      if (!parsed.payload) {
-        continue;
-      }
-      const eventError = extractStreamEventError(parsed.payload);
-      if (eventError) {
-        throw new Error(eventError);
-      }
-      const streamed = extractOpenAiStreamContent(parsed.payload);
-      if (streamed) {
-        return streamed;
-      }
-      return "ok";
-    }
-  } finally {
-    reader.releaseLock();
-  }
-
-  return "";
 }
 
 function extractAnthropicContent(response: unknown): string {
@@ -404,7 +238,7 @@ function parseAiResponse(content: string): AiResponsePayload | null {
       return parsed as AiResponsePayload;
     }
     return null;
-  } catch (_error) {
+  } catch {
     return null;
   }
 }
@@ -420,7 +254,7 @@ function parseAiTopicResponse(content: string): string {
     if (typeof parsed.topic === "string") {
       return parsed.topic.trim();
     }
-  } catch (_error) {
+  } catch {
     // Fallback to plain text mode.
   }
 
@@ -780,7 +614,7 @@ async function requestProviderContent(userPrompt: string, config: AiModelConfig)
       if (parsedResponse && typeof parsedResponse === "object" && !Array.isArray(parsedResponse)) {
         return extractProviderContent(parsedResponse as Record<string, unknown>, config.provider);
       }
-    } catch (_error) {
+    } catch {
       return responseText.trim();
     }
   }
@@ -798,241 +632,9 @@ function extractErrorDetailFromRawText(status: number, text: string): string {
   }
   try {
     return extractErrorDetail(status, JSON.parse(trimmed) as unknown);
-  } catch (_error) {
+  } catch {
     return trimmed.length > 300 ? `${trimmed.slice(0, 300)}…` : trimmed;
   }
-}
-
-async function extractFetchErrorDetail(status: number, response: Response): Promise<string> {
-  return extractErrorDetailFromRawText(status, await response.text());
-}
-
-async function requestProviderContentByStreamingProbe(userPrompt: string, config: AiModelConfig): Promise<string | null> {
-  const apiUrl = config.apiUrl.trim();
-  const streamMode = getOpenAiStreamProbeMode(config, apiUrl);
-  if (!streamMode) {
-    return null;
-  }
-
-  const browserFetch = getBrowserFetch();
-  if (!browserFetch) {
-    return null;
-  }
-
-  const requestConfig = buildProviderRequest(userPrompt, config);
-  const streamingBody = buildStreamingProbeBody(requestConfig.body);
-  if (!streamingBody) {
-    return null;
-  }
-
-  let response: Response;
-  try {
-    response = await browserFetch(requestConfig.url, {
-      method: "POST",
-      headers: {
-        Accept: "text/event-stream",
-        "Content-Type": "application/json",
-        ...requestConfig.headers
-      },
-      body: streamingBody
-    });
-  } catch (_error) {
-    // Keep compatibility when browser fetch is blocked (for example CORS).
-    return null;
-  }
-
-  if (!response.ok) {
-    const rawDetail = await extractFetchErrorDetail(response.status, response);
-    throw new Error(GENERATION_COPY.errors.aiRequestFailed(toHttpErrorMessage(response.status, rawDetail)));
-  }
-
-  if (!response.body) {
-    return null;
-  }
-
-  try {
-    const streamed = await readStreamingProbeContent(response.body);
-    return streamed || null;
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : "stream_error";
-    throw new Error(GENERATION_COPY.errors.aiRequestFailed(toHttpErrorMessage(400, detail)));
-  }
-}
-
-async function requestProviderContentByNodeStreamingProbe(userPrompt: string, config: AiModelConfig): Promise<string | null> {
-  const apiUrl = config.apiUrl.trim();
-  const streamMode = getOpenAiStreamProbeMode(config, apiUrl);
-  if (!streamMode) {
-    return null;
-  }
-
-  let parsedUrl: URL;
-  try {
-    parsedUrl = new URL(apiUrl);
-  } catch (_error) {
-    return null;
-  }
-
-  const nodeRequest = getNodeHttpRequest(parsedUrl.protocol);
-  if (!nodeRequest) {
-    return null;
-  }
-
-  const requestConfig = buildProviderRequest(userPrompt, config);
-  const streamingBody = buildStreamingProbeBody(requestConfig.body);
-  if (!streamingBody) {
-    return null;
-  }
-
-  const contentLength = typeof Buffer !== "undefined"
-    ? Buffer.byteLength(streamingBody).toString()
-    : String(streamingBody.length);
-
-  return await new Promise<string | null>((resolve, reject) => {
-    let settled = false;
-
-    const settleResolve = (value: string | null): void => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      resolve(value);
-    };
-
-    const settleReject = (error: Error): void => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      reject(error);
-    };
-
-    const request = nodeRequest({
-      protocol: parsedUrl.protocol,
-      hostname: parsedUrl.hostname,
-      port: parsedUrl.port ? Number(parsedUrl.port) : undefined,
-      path: `${parsedUrl.pathname}${parsedUrl.search}`,
-      method: "POST",
-      headers: {
-        Accept: "text/event-stream",
-        "Content-Type": "application/json",
-        "Content-Length": contentLength,
-        ...requestConfig.headers
-      }
-    }, (response) => {
-      const stream = response as {
-        statusCode?: number;
-        setEncoding?: (encoding: string) => void;
-        on: (event: string, listener: (chunk?: string) => void) => void;
-        destroy?: () => void;
-      };
-      const status = stream.statusCode ?? 0;
-      let rawText = "";
-      let buffer = "";
-
-      if (typeof stream.setEncoding === "function") {
-        stream.setEncoding("utf8");
-      }
-
-      if (status >= 400) {
-        stream.on("data", (chunk = "") => {
-          rawText += chunk;
-        });
-        stream.on("end", () => {
-          const rawDetail = extractErrorDetailFromRawText(status, rawText);
-          settleReject(new Error(GENERATION_COPY.errors.aiRequestFailed(toHttpErrorMessage(status, rawDetail))));
-        });
-        stream.on("error", () => {
-          settleResolve(null);
-        });
-        return;
-      }
-
-      stream.on("data", (chunk = "") => {
-        if (settled) {
-          return;
-        }
-        rawText += chunk;
-        buffer += chunk;
-
-        const { frames, rest } = readSseDataFrames(buffer);
-        buffer = rest;
-        for (const frame of frames) {
-          const parsed = parseStreamFrame(frame);
-          if (parsed.isDone) {
-            stream.destroy?.();
-            settleResolve("ok");
-            return;
-          }
-          if (!parsed.payload) {
-            continue;
-          }
-
-          const eventError = extractStreamEventError(parsed.payload);
-          if (eventError) {
-            settleReject(new Error(GENERATION_COPY.errors.aiRequestFailed(toHttpErrorMessage(400, eventError))));
-            return;
-          }
-
-          const streamed = extractOpenAiStreamContent(parsed.payload);
-          if (streamed) {
-            stream.destroy?.();
-            settleResolve(streamed);
-            return;
-          }
-        }
-      });
-
-      stream.on("end", () => {
-        if (settled) {
-          return;
-        }
-
-        const pending = buffer.trim();
-        if (pending.length > 0) {
-          const parsed = parseStreamFrame(pending);
-          if (parsed.isDone) {
-            settleResolve("ok");
-            return;
-          }
-          if (parsed.payload) {
-            const eventError = extractStreamEventError(parsed.payload);
-            if (eventError) {
-              settleReject(new Error(GENERATION_COPY.errors.aiRequestFailed(toHttpErrorMessage(400, eventError))));
-              return;
-            }
-            const streamed = extractOpenAiStreamContent(parsed.payload);
-            if (streamed) {
-              settleResolve(streamed);
-              return;
-            }
-          }
-        }
-
-        try {
-          const parsed = JSON.parse(rawText) as unknown;
-          const content = extractProviderContent(parsed, config.provider);
-          settleResolve(content || null);
-        } catch (_error) {
-          settleResolve(null);
-        }
-      });
-
-      stream.on("error", () => {
-        settleResolve(null);
-      });
-    });
-
-    request.on("error", () => {
-      settleResolve(null);
-    });
-    request.setTimeout?.(15_000, () => {
-      request.destroy?.(new Error("timeout"));
-      settleResolve(null);
-    });
-    request.write(streamingBody);
-    request.end();
-  });
 }
 
 export async function generateAiFlashcards(sections: ParsedSection[], settings: NoteFlashcardsSettings): Promise<Flashcard[]> {

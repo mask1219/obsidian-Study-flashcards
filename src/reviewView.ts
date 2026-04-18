@@ -409,8 +409,11 @@ export class ReviewView extends ItemView {
     new Setting(filterGroup)
       .setName(REVIEW_COPY.study.scopeLabel)
       .addDropdown((dropdown) => {
-        display.toolbar.scopeOptions.forEach((option) => dropdown.addOption(option.value, option.label));
-        dropdown.setValue(this.studyScope).onChange((value) => {
+        for (const option of display.toolbar.scopeOptions) {
+          dropdown.addOption(option.value, option.label);
+        }
+        dropdown.setValue(this.studyScope);
+        dropdown.onChange((value): void => {
           this.studyScope = value as StudyScope;
           void this.reloadCards();
         });
@@ -419,8 +422,11 @@ export class ReviewView extends ItemView {
     new Setting(filterGroup)
       .setName(REVIEW_COPY.study.countModeLabel)
       .addDropdown((dropdown) => {
-        display.toolbar.countModeOptions.forEach((option) => dropdown.addOption(option.value, option.label));
-        dropdown.setValue(this.countMode).onChange((value) => {
+        for (const option of display.toolbar.countModeOptions) {
+          dropdown.addOption(option.value, option.label);
+        }
+        dropdown.setValue(this.countMode);
+        dropdown.onChange((value): void => {
           this.countMode = value as StudyCountMode;
           void this.reloadCards();
         });
@@ -429,8 +435,11 @@ export class ReviewView extends ItemView {
     new Setting(filterGroup)
       .setName(REVIEW_COPY.study.orderModeLabel)
       .addDropdown((dropdown) => {
-        display.toolbar.orderModeOptions.forEach((option) => dropdown.addOption(option.value, option.label));
-        dropdown.setValue(this.orderMode).onChange((value) => {
+        for (const option of display.toolbar.orderModeOptions) {
+          dropdown.addOption(option.value, option.label);
+        }
+        dropdown.setValue(this.orderMode);
+        dropdown.onChange((value): void => {
           this.orderMode = value as StudyOrderMode;
           void this.reloadCards();
         });

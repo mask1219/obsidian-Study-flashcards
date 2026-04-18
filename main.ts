@@ -212,7 +212,7 @@ export default class NoteFlashcardsPlugin extends Plugin {
       this.app.workspace.getLeavesOfType(REVIEW_VIEW_TYPE)[0],
       (split) => this.app.workspace.getRightLeaf(split),
       (leaf) => {
-        this.app.workspace.revealLeaf(leaf);
+        void this.app.workspace.revealLeaf(leaf);
       },
       (message) => new Notice(message),
       REVIEW_VIEW_TYPE

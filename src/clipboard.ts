@@ -15,7 +15,7 @@ export async function tryCopyToClipboard(text: string): Promise<boolean> {
       await navigator.clipboard.writeText(text);
       return true;
     }
-  } catch (_error) {
+  } catch {
     // Continue to Electron clipboard fallback.
   }
 
@@ -29,7 +29,7 @@ export async function tryCopyToClipboard(text: string): Promise<boolean> {
       electron.clipboard.writeText(text);
       return true;
     }
-  } catch (_error) {
+  } catch {
     return false;
   }
 

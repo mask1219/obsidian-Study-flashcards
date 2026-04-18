@@ -129,7 +129,7 @@ export function validateModelConfigForRequest(config: AiModelConfig): string | n
   let parsedUrl: URL;
   try {
     parsedUrl = new URL(config.apiUrl.trim());
-  } catch (_error) {
+  } catch {
     return AI_MODEL_ERRORS.invalidApiUrl;
   }
   if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {

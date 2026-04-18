@@ -1,6 +1,6 @@
 import { AI_MODEL_ERRORS } from "./aiModelState";
 import { describe, expect, it } from "vitest";
-import { GENERATION_COPY, generateCardsForSections } from "./generationStrategy";
+import { generateCardsForSections } from "./generationStrategy";
 import type { NoteFlashcardsSettings, ParsedSection } from "./types";
 
 const SECTIONS: ParsedSection[] = [

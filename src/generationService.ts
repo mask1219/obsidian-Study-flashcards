@@ -162,7 +162,7 @@ export class GenerationService {
     let result;
     try {
       result = await this.store.appendCardsWithDedupe(cardsWithSource);
-    } catch (_error) {
+    } catch {
       throw new Error(REVIEW_COPY.mistakeTopic.writeFailed);
     }
 

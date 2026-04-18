@@ -517,7 +517,7 @@ function validateModelConfigForRequest(config) {
   let parsedUrl;
   try {
     parsedUrl = new URL(config.apiUrl.trim());
-  } catch (_error) {
+  } catch {
     return AI_MODEL_ERRORS.invalidApiUrl;
   }
   if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
@@ -689,7 +689,7 @@ function resolveProviderApiUrl(apiUrl, model) {
 function isResponsesEndpoint(apiUrl) {
   try {
     return /\/responses\/?$/.test(new URL(apiUrl).pathname);
-  } catch (_error) {
+  } catch {
     return false;
   }
 }
@@ -790,7 +790,7 @@ function parseStreamFrame(frame) {
       return { isDone: false, payload: null };
     }
     return { isDone: false, payload };
-  } catch (_error) {
+  } catch {
     return { isDone: false, payload: null };
   }
 }
@@ -845,7 +845,7 @@ function parseAiResponse(content) {
       return parsed;
     }
     return null;
-  } catch (_error) {
+  } catch {
     return null;
   }
 }
@@ -859,7 +859,7 @@ function parseAiTopicResponse(content) {
     if (typeof parsed.topic === "string") {
       return parsed.topic.trim();
     }
-  } catch (_error) {
+  } catch {
   }
   return cleaned.split("\n").map((line) => line.trim()).find((line) => line.length > 0) ?? "";
 }
@@ -1170,7 +1170,7 @@ async function requestProviderContent(userPrompt, config) {
       if (parsedResponse && typeof parsedResponse === "object" && !Array.isArray(parsedResponse)) {
         return extractProviderContent(parsedResponse, config.provider);
       }
-    } catch (_error) {
+    } catch {
       return responseText.trim();
     }
   }
@@ -1186,7 +1186,7 @@ function extractErrorDetailFromRawText(status, text) {
   }
   try {
     return extractErrorDetail(status, JSON.parse(trimmed));
-  } catch (_error) {
+  } catch {
     return trimmed.length > 300 ? `${trimmed.slice(0, 300)}\u2026` : trimmed;
   }
 }
@@ -1747,7 +1747,7 @@ var GenerationService = class {
     let result;
     try {
       result = await this.store.appendCardsWithDedupe(cardsWithSource);
-    } catch (_error) {
+    } catch {
       throw new Error(REVIEW_COPY.mistakeTopic.writeFailed);
     }
     return {
@@ -2277,7 +2277,7 @@ async function tryCopyToClipboard(text) {
       await navigator.clipboard.writeText(text);
       return true;
     }
-  } catch (_error) {
+  } catch {
   }
   try {
     const runtimeRequire = getRuntimeRequire();
@@ -2289,7 +2289,7 @@ async function tryCopyToClipboard(text) {
       electron.clipboard.writeText(text);
       return true;
     }
-  } catch (_error) {
+  } catch {
     return false;
   }
   return false;
@@ -2630,22 +2630,31 @@ var ReviewView = class _ReviewView extends import_obsidian4.ItemView {
     const generateGroup = toolbar.createDiv({ cls: "note-flashcards-toolbar-group" });
     const utilityGroup = toolbar.createDiv({ cls: "note-flashcards-toolbar-group" });
     new import_obsidian4.Setting(filterGroup).setName(REVIEW_COPY.study.scopeLabel).addDropdown((dropdown) => {
-      display.toolbar.scopeOptions.forEach((option) => dropdown.addOption(option.value, option.label));
-      dropdown.setValue(this.studyScope).onChange((value) => {
+      for (const option of display.toolbar.scopeOptions) {
+        dropdown.addOption(option.value, option.label);
+      }
+      dropdown.setValue(this.studyScope);
+      dropdown.onChange((value) => {
         this.studyScope = value;
         void this.reloadCards();
       });
     });
     new import_obsidian4.Setting(filterGroup).setName(REVIEW_COPY.study.countModeLabel).addDropdown((dropdown) => {
-      display.toolbar.countModeOptions.forEach((option) => dropdown.addOption(option.value, option.label));
-      dropdown.setValue(this.countMode).onChange((value) => {
+      for (const option of display.toolbar.countModeOptions) {
+        dropdown.addOption(option.value, option.label);
+      }
+      dropdown.setValue(this.countMode);
+      dropdown.onChange((value) => {
         this.countMode = value;
         void this.reloadCards();
       });
     });
     new import_obsidian4.Setting(filterGroup).setName(REVIEW_COPY.study.orderModeLabel).addDropdown((dropdown) => {
-      display.toolbar.orderModeOptions.forEach((option) => dropdown.addOption(option.value, option.label));
-      dropdown.setValue(this.orderMode).onChange((value) => {
+      for (const option of display.toolbar.orderModeOptions) {
+        dropdown.addOption(option.value, option.label);
+      }
+      dropdown.setValue(this.orderMode);
+      dropdown.onChange((value) => {
         this.orderMode = value;
         void this.reloadCards();
       });
@@ -3012,7 +3021,7 @@ var NoteFlashcardsPlugin = class extends import_obsidian5.Plugin {
       this.app.workspace.getLeavesOfType(REVIEW_VIEW_TYPE)[0],
       (split) => this.app.workspace.getRightLeaf(split),
       (leaf) => {
-        this.app.workspace.revealLeaf(leaf);
+        void this.app.workspace.revealLeaf(leaf);
       },
       (message) => new import_obsidian5.Notice(message),
       REVIEW_VIEW_TYPE
